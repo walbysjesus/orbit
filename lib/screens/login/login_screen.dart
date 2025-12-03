@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -12,168 +10,121 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController emailController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
-  bool loading = false;
+  bool isLoading = false;
 
-  Future<void> loginUser() async {
+  void loginUser() {
     final email = emailController.text.trim();
-    final password = passwordController.text.trim();
+    final password = passwordController.text;
 
     if (email.isEmpty || password.isEmpty) {
-      showMessage("Completa todos los campos");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Por favor completa todos los campos")),
+      );
       return;
     }
 
-    setState(() => loading = true);
+    setState(() => isLoading = true);
 
-    try {
-      // LOGIN CON FIREBASE
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
+    Future.delayed(const Duration(seconds: 2), () {
+      setState(() => isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Inicio de sesión exitoso")),
       );
-
-      // LOGIN CON API INTERNA DE ORBIT
-      await loginOrbitAPI(email, password);
-
-      showMessage("Inicio exitoso 🚀");
-
-      // IR A PANTALLA PRINCIPAL
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
-      );
-    } on FirebaseAuthException catch (e) {
-      showMessage(firebaseError(e.code));
-    } catch (e) {
-      showMessage("Error inesperado: $e");
-    }
-
-    setState(() => loading = false);
+    });
   }
 
-  // SIMULACIÓN API ORBIT (puedes conectar tu servidor aquí)
-  Future<void> loginOrbitAPI(String email, String password) async {
-    await Future.delayed(const Duration(milliseconds: 600));
-    return; // Aquí iría tu llamada HTTP POST
-  }
-
-  String firebaseError(String code) {
-    switch (code) {
-      case "invalid-email":
-        return "Correo inválido";
-      case "user-not-found":
-        return "Usuario no existe";
-      case "wrong-password":
-        return "Contraseña incorrecta";
-      default:
-        return "Error: $code";
-    }
-  }
-
-  void showMessage(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg, style: const TextStyle(color: Colors.white)),
-        backgroundColor: Colors.blueAccent,
-      ),
-    );
+  @override
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xff020617), // NEGRO ESPACIAL ORBIT
+      backgroundColor: const Color(0xFF0A0E21), // Estilo ORBIT
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(25),
+          padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 20),
+              const SizedBox(height: 30),
               const Text(
-                "Bienvenido a",
-                style: TextStyle(color: Colors.white70, fontSize: 20),
-              ),
-              const Text(
-                "ORBIT",
+                "Bienvenido a Orbit",
                 style: TextStyle(
-                  color: Colors.blueAccent,
-                  fontSize: 40,
+                  fontSize: 30,
                   fontWeight: FontWeight.bold,
-                  letterSpacing: 4,
+                  color: Colors.white,
                 ),
               ),
-              const SizedBox(height: 35),
-
-              // CORREO
-              field(
-                controller: emailController,
-                label: "Correo electrónico",
-                icon: Icons.email_outlined,
+              const SizedBox(height: 8),
+              const Text(
+                "Ingresa para continuar con tu servicio satelital",
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Colors.white70,
+                ),
               ),
+              const SizedBox(height: 30),
 
+              /// CAMPO EMAIL
+              TextField(
+                controller: emailController,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: "Correo electrónico",
+                  labelStyle: const TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Colors.white12,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
               const SizedBox(height: 20),
 
-              // CONTRASEÑA
-              field(
+              /// CAMPO CONTRASEÑA
+              TextField(
                 controller: passwordController,
-                label: "Contraseña",
-                icon: Icons.lock_outline,
-                obscure: true,
+                obscureText: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: "Contraseña",
+                  labelStyle: const TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Colors.white12,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
               ),
 
               const SizedBox(height: 35),
 
-              // BOTÓN LOGIN
+              /// BOTÓN INICIAR SESIÓN
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: loading ? null : loginUser,
+                  onPressed: isLoading ? null : loginUser,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blueAccent,
-                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: loading
+                  child: isLoading
                       ? const CircularProgressIndicator(color: Colors.white)
                       : const Text(
                           "Iniciar sesión",
-                          style: TextStyle(
-                            fontSize: 18,
-                            color: Colors.white,
-                          ),
+                          style: TextStyle(fontSize: 18, color: Colors.white),
                         ),
                 ),
               ),
-
-              const Spacer(),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget field({
-    required TextEditingController controller,
-    required String label,
-    required IconData icon,
-    bool obscure = false,
-  }) {
-    return TextField(
-      controller: controller,
-      obscureText: obscure,
-      style: const TextStyle(color: Colors.white),
-      decoration: InputDecoration(
-        prefixIcon: Icon(icon, color: Colors.blueAccent),
-        labelText: label,
-        labelStyle: const TextStyle(color: Colors.white70),
-        filled: true,
-        fillColor: Colors.white10,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
         ),
       ),
     );

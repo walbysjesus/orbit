@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:orbit/login_screen.dart';
 import 'register_screen.dart';
-import 'login/login_screen.dart';
 
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
@@ -8,88 +8,102 @@ class WelcomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Fondo con la imagen
+          /// Fondo espacial
           Positioned.fill(
             child: Image.asset(
-              'assets/background_space.jpg',
+              'assets/images/background_space.jpg',
               fit: BoxFit.cover,
             ),
           ),
 
-          // Contenido principal
+          /// Contenido centrado
           Center(
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                // LOGO
-                Image.asset(
-                  'assets/orbit_logo.png',
-                  width: 180,
+                /// Texto WELCOME TO
+                Text(
+                  'WELCOME TO',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.9),
+                    fontSize: 26,
+                    fontWeight: FontWeight.w300,
+                    letterSpacing: 3,
+                  ),
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 10),
 
-                // Título
-                const Text(
-                  "Welcome to Orbit",
+                /// Texto ORBIT
+                Text(
+                  'ORBIT',
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 28,
+                    fontSize: 52,
                     fontWeight: FontWeight.bold,
+                    letterSpacing: 6,
                   ),
+                ),
+
+                const SizedBox(height: 30),
+
+                /// Esfera azul (tu logo actual)
+                Image.asset(
+                  'assets/images/logo_orbit.jpg',
+                  width: 220,
+                  height: 220,
                 ),
 
                 const SizedBox(height: 40),
 
-                // BOTÓN REGISTRO
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const RegisterScreen(),
+                /// Botón Log In
+                SizedBox(
+                  width: 220,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueAccent,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueAccent,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 50,
-                      vertical: 15,
                     ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                  ),
-                  child: const Text(
-                    "Registrarme",
-                    style: TextStyle(
-                      fontSize: 18,
-                      color: Colors.white,
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const LoginScreen()),
+                      );
+                    },
+                    child: const Text(
+                      'Log In',
+                      style: TextStyle(fontSize: 18, color: Colors.white),
                     ),
                   ),
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 14),
 
-                // BOTÓN LOGIN
-                TextButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const LoginScreen(),
+                /// Botón Create Account
+                SizedBox(
+                  width: 220,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.white),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                    );
-                  },
-                  child: const Text(
-                    "Ya tengo cuenta",
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 16,
+                    ),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const RegisterScreen()),
+                      );
+                    },
+                    child: const Text(
+                      'Create Account',
+                      style: TextStyle(fontSize: 18, color: Colors.white),
                     ),
                   ),
                 ),

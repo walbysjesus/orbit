@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'screens/welcome_screen.dart';
-import 'login/login_screen.dart';
+import 'screens/login/login_screen.dart';
+import 'screens/register_screen.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const Orbitapp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class Orbitapp extends StatelessWidget {
+  const Orbitapp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -21,6 +22,7 @@ class MyApp extends StatelessWidget {
       routes: {
         '/': (context) => const WelcomeScreen(),
         '/login': (context) => const LoginScreen(),
+        '/register': (context) => const RegisterScreen(),
       },
     );
   }
