@@ -1,28 +1,35 @@
 import 'package:flutter/material.dart';
-import 'screens/welcome_screen.dart';
-import 'screens/login/login_screen.dart';
-import 'screens/register_screen.dart';
 
-void main() {
-  runApp(const Orbitapp());
+import 'screens/auth/welcome_screen.dart';
+import 'screens/auth/login_screen.dart';
+import 'screens/auth/register_screen.dart';
+import 'screens/home/home_screen.dart';
+
+import 'services/auth_service.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  final loggedIn = await AuthService.isLoggedIn();
+
+  runApp(MyApp(isLoggedIn: loggedIn));
 }
 
-class Orbitapp extends StatelessWidget {
-  const Orbitapp({super.key});
+class MyApp extends StatelessWidget {
+  final bool isLoggedIn;
+
+  const MyApp({super.key, required this.isLoggedIn});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'ORBIT App', // Nombre de la app
-      theme: ThemeData(
-        primarySwatch: Colors.deepPurple, // Tema base
-      ),
-      initialRoute: '/', // Ruta inicial
+      initialRoute: isLoggedIn ? '/home' : '/',
       routes: {
-        '/': (context) => const WelcomeScreen(),
-        '/login': (context) => const LoginScreen(),
-        '/register': (context) => const RegisterScreen(),
+        '/': (_) => const WelcomeScreen(),
+        '/login': (_) => const LoginScreen(),
+        '/register': (_) => const RegisterScreen(),
+        '/home': (_) => const HomeScreen(),
       },
     );
   }
