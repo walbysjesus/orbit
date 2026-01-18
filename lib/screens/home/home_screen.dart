@@ -5,10 +5,12 @@ import 'dashboard_screen.dart';
 import 'contacts_screen.dart';
 import 'history_screen.dart';
 import 'settings_screen.dart';
+import 'status_screen.dart';
 
 // Communication
 import '../communication/call_screen.dart';
 import '../communication/chat_screen.dart';
+import '../../services/auth_service.dart';
 import '../communication/video_call_screen.dart';
 
 // Orbit IA
@@ -24,12 +26,49 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
 
+  String _displayName = 'Usuario ORBIT';
+  String? _feedbackMsg;
+  bool _isLoadingUser = false;
+  bool _isNetworkStable = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserDisplay();
+    _checkNetworkStatus();
+  }
+
+  Future<void> _loadUserDisplay() async {
+    setState(() { _isLoadingUser = true; _feedbackMsg = null; });
+    try {
+      final user = AuthService.getCurrentUser();
+      setState(() {
+        _displayName = user?.displayName ?? user?.uid ?? 'Usuario ORBIT';
+        _isLoadingUser = false;
+      });
+    } catch (e) {
+      setState(() {
+        _feedbackMsg = 'Error al cargar usuario: ' + e.toString().replaceAll('Exception:', '').trim();
+        _isLoadingUser = false;
+      });
+    }
+  }
+
   final List<Widget> _pages = const [
     DashboardScreen(),
     ContactsScreen(),
+    StatusScreen(),
     HistoryScreen(),
     SettingsScreen(),
   ];
+
+  Future<void> _checkNetworkStatus() async {
+    // Simulación de chequeo de red satelital
+    await Future.delayed(const Duration(milliseconds: 500));
+    setState(() {
+      _isNetworkStable = true; // Cambia a false si detectas problemas reales
+    });
+  }
 
   void _open(BuildContext context, Widget screen) {
     Navigator.push(
@@ -43,19 +82,21 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: Colors.grey.shade100,
 
-      // ───── APP BAR ─────
       appBar: AppBar(
-        title: const Text(
-          'Orbit',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
+        title: _isLoadingUser
+            ? const Text('Cargando usuario...', style: TextStyle(fontWeight: FontWeight.w600))
+            : Text(_displayName, style: const TextStyle(fontWeight: FontWeight.w600)),
         centerTitle: true,
         elevation: 0,
       ),
 
-      // ───── BODY ─────
       body: Column(
         children: [
+          if (_feedbackMsg != null)
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Text(_feedbackMsg!, style: const TextStyle(color: Colors.redAccent)),
+            ),
           // STATUS BAR (clave para Orbit)
           Container(
             padding: const EdgeInsets.all(12),
@@ -65,13 +106,13 @@ class _HomeScreenState extends State<HomeScreen> {
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
-              children: const [
-                Icon(Icons.satellite_alt, color: Colors.green),
-                SizedBox(width: 10),
+              children: [
+                Icon(Icons.satellite_alt, color: _isNetworkStable ? Colors.green : Colors.red),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Red satelital activa · Señal estable',
-                    style: TextStyle(color: Colors.white),
+                    _isNetworkStable ? 'Red satelital activa · Señal estable' : 'Red satelital inactiva · Sin señal',
+                    style: const TextStyle(color: Colors.white),
                   ),
                 ),
               ],
@@ -95,6 +136,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   onTap: () => _open(context, const OrbitIAScreen()),
                 ),
                 _ActionCard(
+                  icon: Icons.camera_alt,
+                  title: 'Estados',
+                  onTap: () => _open(context, const StatusScreen()),
+                ),
+                _ActionCard(
                   icon: Icons.call,
                   title: 'Llamada',
                   onTap: () => _open(context, const CallScreen()),
@@ -102,7 +148,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 _ActionCard(
                   icon: Icons.chat,
                   title: 'Chat',
-                  onTap: () => _open(context, const ChatScreen()),
+                  onTap: () => _open(context, ChatScreen(contactNameOrId: _displayName)),
                 ),
                 _ActionCard(
                   icon: Icons.videocam,
@@ -115,14 +161,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
           const SizedBox(height: 12),
 
-          // MAIN CONTENT
           Expanded(
             child: _pages[_currentIndex],
           ),
         ],
       ),
 
-      // ───── BOTTOM NAV ─────
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (i) => setState(() => _currentIndex = i),
@@ -137,6 +181,10 @@ class _HomeScreenState extends State<HomeScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.contacts),
             label: 'Contactos',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.camera_alt),
+            label: 'Estados',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.history),
@@ -174,7 +222,7 @@ class _ActionCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              color: Colors.black.withAlpha(13),
               blurRadius: 10,
             ),
           ],

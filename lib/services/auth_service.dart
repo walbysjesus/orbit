@@ -1,69 +1,78 @@
- import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
-import '../utils/api.dart';
+
+import 'package:firebase_auth/firebase_auth.dart';
 
 class AuthService {
-  // LOGIN
-  static Future<bool> login(String email, String password) async {
-    final response = await http.post(
-      Uri.parse('${Api.baseUrl}/auth/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': email,
-        'password': password,
-      }),
-    );
+  static final FirebaseAuth _auth = FirebaseAuth.instance;
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final token = data['token'];
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('jwt', token);
-
-      return true;
+  // ================== REGISTER ==================
+  static Future<void> register({
+    required String email,
+    required String password,
+    String? fullName,
+  }) async {
+    try {
+      final cred = await _auth.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      final user = cred.user;
+      if (user == null) {
+        throw Exception('Usuario no creado');
+      }
+      if (fullName != null) {
+        await user.updateDisplayName(fullName);
+      }
+    } on FirebaseAuthException catch (e) {
+      throw Exception(_firebaseError(e.code));
     }
-    return false;
   }
 
-  // REGISTRO + AUTO LOGIN
-  static Future<bool> register(
-    String name,
-    String email,
-    String password,
-  ) async {
-    // Genera un ID único para el usuario (puedes usarlo en tu lógica real)
-    final String userId = const Uuid().v4();
-    // Ejemplo: print(userId) o úsalo en el registro
-    print('ID único generado para el usuario: $userId');
-    final response = await http.post(
-      Uri.parse('${Api.baseUrl}/auth/register'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'name': name,
-        'email': email,
-        'password': password,
-      }),
-    );
-
-    if (response.statusCode == 201) {
-      // auto-login
-      return await login(email, password);
+  // ================== LOGIN ==================
+  static Future<void> login({
+    required String email,
+    required String password,
+  }) async {
+    try {
+      final cred = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      if (cred.user == null) {
+        throw Exception('Login inválido');
+      }
+    } on FirebaseAuthException catch (e) {
+      throw Exception(_firebaseError(e.code));
     }
-    return false;
   }
 
-  // TOKEN EXISTE?
+  // ================== SESSION ==================
   static Future<bool> isLoggedIn() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('jwt') != null;
+    return _auth.currentUser != null;
   }
 
-  // LOGOUT
+  static User? getCurrentUser() {
+    return _auth.currentUser;
+  }
+
   static Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('jwt');
+    await _auth.signOut();
+  }
+
+  // ================== UTIL ==================
+  static String _firebaseError(String code) {
+    switch (code) {
+      case 'email-already-in-use':
+        return 'Este correo ya está registrado';
+      case 'invalid-email':
+        return 'Correo inválido';
+      case 'weak-password':
+        return 'La contraseña es muy débil';
+      case 'user-not-found':
+        return 'Usuario no existe';
+      case 'wrong-password':
+        return 'Contraseña incorrecta';
+      default:
+        return 'Error de autenticación';
+    }
   }
 }

@@ -1,31 +1,18 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-
 class OrbitIAService {
-  static const String _baseUrl = 'https://api.orbit.ai'; 
-  // ← aquí va TU backend real
-
+  // Backend removed. This is a stub for local-only or Firebase-based logic.
   static Future<String> sendMessage({
     required String userId,
     required String message,
   }) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/ia/chat'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer YOUR_TOKEN',
-      },
-      body: jsonEncode({
-        'userId': userId,
-        'message': message,
-      }),
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      return data['response'];
+    // Lógica local simulada para IA en español
+    if (message.toLowerCase().contains('hola')) {
+      return "¡Hola! ¿En qué puedo ayudarte hoy?";
+    } else if (message.toLowerCase().contains('adiós')) {
+      return "¡Hasta luego! Si necesitas algo más, aquí estaré.";
+    } else if (message.trim().isEmpty) {
+      return "Por favor, escribe un mensaje para que pueda ayudarte.";
     } else {
-      throw Exception('Orbit IA error');
+      return "[Respuesta IA simulada]: Recibí tu mensaje: '$message'";
     }
   }
 }

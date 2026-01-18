@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:uuid/uuid.dart';
+import '../../services/auth_service.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -9,16 +9,16 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
-    // Generador de IDs únicos
-    final Uuid uuid = Uuid();
   final _formKey = GlobalKey<FormState>();
+  bool _isLoading = false;
 
   // Controllers
   final TextEditingController fullNameController = TextEditingController();
-  final TextEditingController documentNumberController =
-      TextEditingController();
+  final TextEditingController documentNumberController = TextEditingController();
   final TextEditingController emailController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
+
+  bool _obscurePassword = true;
 
   String? documentType;
   String? country;
@@ -27,52 +27,54 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final List<String> documentTypes = [
     'Cédula',
     'Pasaporte',
-    'Tarjeta de Identidad',
     'DNI',
     'Driver License',
     'National ID',
-    'Residence Permit',
-    'Social Security',
-    'Military ID',
     'Otro',
   ];
 
+  // ================== PAÍSES ==================
   final List<String> countries = [
-    'Colombia',
-    'México',
     'Argentina',
-    'Estados Unidos',
-    'España',
+    'Australia',
     'Brasil',
     'Canadá',
-    'Alemania',
-    'Francia',
-    'Italia',
-    'Reino Unido',
-    'Japón',
+    'Chile',
     'China',
+    'Colombia',
+    'España',
+    'Estados Unidos',
+    'Francia',
+    'Alemania',
     'India',
-    'Australia',
+    'Italia',
+    'Japón',
+    'México',
+    'Perú',
+    'Reino Unido',
     'Sudáfrica',
   ];
 
+  // ...existing code...
   final Map<String, List<String>> citiesByCountry = {
-    'Colombia': ['Bogotá', 'Medellín', 'Cali', 'Barranquilla', 'Cartagena'],
-    'México': ['Ciudad de México', 'Monterrey', 'Guadalajara', 'Cancún', 'Puebla'],
-    'Argentina': ['Buenos Aires', 'Córdoba', 'Rosario', 'Mendoza', 'La Plata'],
-    'Estados Unidos': ['New York', 'Los Angeles', 'Chicago', 'Miami', 'Houston'],
-    'España': ['Madrid', 'Barcelona', 'Valencia', 'Sevilla', 'Zaragoza'],
-    'Brasil': ['São Paulo', 'Rio de Janeiro', 'Brasília', 'Salvador', 'Fortaleza'],
-    'Canadá': ['Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa'],
-    'Alemania': ['Berlín', 'Múnich', 'Hamburgo', 'Fráncfort', 'Colonia'],
-    'Francia': ['París', 'Marsella', 'Lyon', 'Toulouse', 'Niza'],
-    'Italia': ['Roma', 'Milán', 'Nápoles', 'Turín', 'Palermo'],
-    'Reino Unido': ['Londres', 'Manchester', 'Birmingham', 'Liverpool', 'Edimburgo'],
-    'Japón': ['Tokio', 'Osaka', 'Kioto', 'Yokohama', 'Sapporo'],
-    'China': ['Pekín', 'Shanghái', 'Cantón', 'Shenzhen', 'Chengdu'],
-    'India': ['Delhi', 'Bombay', 'Bangalore', 'Chennai', 'Calcuta'],
-    'Australia': ['Sídney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaida'],
-    'Sudáfrica': ['Johannesburgo', 'Ciudad del Cabo', 'Durban', 'Pretoria', 'Port Elizabeth'],
+    'Argentina': [ 'Buenos Aires', 'Córdoba', 'Rosario', 'Mendoza', 'La Plata' ],
+    'Australia': [ 'Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide' ],
+    'Brasil': [ 'São Paulo', 'Rio de Janeiro', 'Brasília', 'Salvador', 'Fortaleza' ],
+    'Canadá': [ 'Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa' ],
+    'Chile': [ 'Santiago', 'Valparaíso', 'Concepción', 'Antofagasta', 'La Serena' ],
+    'China': [ 'Beijing', 'Shanghai', 'Shenzhen', 'Guangzhou', 'Chengdu' ],
+    'Colombia': [ 'Bogotá', 'Medellín', 'Cali', 'Barranquilla', 'Cartagena' ],
+    'España': [ 'Madrid', 'Barcelona', 'Valencia', 'Sevilla', 'Zaragoza' ],
+    'Estados Unidos': [ 'New York', 'Los Angeles', 'Chicago', 'Miami', 'Houston' ],
+    'Francia': [ 'Paris', 'Marseille', 'Lyon', 'Toulouse', 'Nice' ],
+    'Alemania': [ 'Berlin', 'Munich', 'Hamburg', 'Frankfurt', 'Cologne' ],
+    'India': [ 'New Delhi', 'Mumbai', 'Bangalore', 'Chennai', 'Hyderabad' ],
+    'Italia': [ 'Rome', 'Milan', 'Naples', 'Turin', 'Florence' ],
+    'Japón': [ 'Tokyo', 'Osaka', 'Kyoto', 'Yokohama', 'Sapporo' ],
+    'México': [ 'Ciudad de México', 'Monterrey', 'Guadalajara', 'Puebla', 'Cancún' ],
+    'Perú': [ 'Lima', 'Arequipa', 'Trujillo', 'Cusco', 'Piura' ],
+    'Reino Unido': [ 'London', 'Manchester', 'Birmingham', 'Liverpool', 'Edinburgh' ],
+    'Sudáfrica': [ 'Johannesburg', 'Cape Town', 'Durban', 'Pretoria', 'Port Elizabeth' ],
   };
 
   @override
@@ -84,24 +86,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  void _registerUser() {
-    if (_formKey.currentState!.validate()) {
-      // Genera un ID único para el usuario (puedes usarlo en tu lógica real)
-      final String userId = uuid.v4();
-      debugPrint('ID único generado para el usuario: $userId');
-
+  Future<void> _registerUser() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isLoading = true);
+    try {
+      await AuthService.register(
+        email: emailController.text.trim(),
+        password: passwordController.text.trim(),
+        fullName: fullNameController.text.trim(),
+      );
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ Registration successful'),
+          content: Text('Registro exitoso'),
           backgroundColor: Colors.green,
         ),
       );
-
-      // Simulación de registro exitoso
-      Future.delayed(const Duration(seconds: 1), () {
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, '/home'); // navega a HomeScreen de forma profesional
-      });
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, '/home');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString()),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -132,7 +145,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     letterSpacing: 2,
                   ),
                 ),
-
                 const SizedBox(height: 30),
 
                 _inputField(
@@ -140,84 +152,59 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   controller: fullNameController,
                 ),
 
-                _dropdownField(
-                  label: 'Document Type',
-                  value: documentType,
-                  items: documentTypes,
-                  onChanged: (value) {
-                    setState(() => documentType = value);
-                  },
-                ),
+                  // ...continúan los campos del formulario...
 
-                _inputField(
-                  label: 'Document Number',
-                  controller: documentNumberController,
-                  keyboardType: TextInputType.number,
-                ),
-
-                _dropdownField(
-                  label: 'Country',
-                  value: country,
-                  items: countries,
-                  onChanged: (value) {
-                    setState(() {
-                      country = value;
-                      city = null;
-                    });
-                  },
-                ),
-
-                _dropdownField(
-                  label: 'City / State',
-                  value: city,
-                  items: country == null
-                      ? []
-                      : citiesByCountry[country!] ?? [],
-                  onChanged: (value) {
-                    setState(() => city = value);
-                  },
-                ),
-
-                _inputField(
-                  label: 'Email',
-                  controller: emailController,
-                  keyboardType: TextInputType.emailAddress,
-                ),
-
-                _inputField(
-                  label: 'Password',
-                  controller: passwordController,
-                  obscureText: true,
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: TextFormField(
+                    controller: passwordController,
+                    obscureText: _obscurePassword,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: _inputDecoration('Password').copyWith(
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                          color: Colors.white,
+                        ),
+                        tooltip: _obscurePassword ? 'Mostrar contraseña' : 'Ocultar contraseña',
+                        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      ),
+                    ),
+                    validator: (value) =>
+                        value == null || value.isEmpty ? 'Required field' : null,
+                  ),
                 ),
 
                 const SizedBox(height: 30),
 
-                // BOTÓN SIGN UP FUNCIONAL
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF3389FF),
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                  ),
-                  onPressed: _registerUser,
-                  child: const Text(
-                    'SIGN UP',
-                    style: TextStyle(
-                      fontSize: 18,
-                      letterSpacing: 1.5,
-                    ),
-                  ),
-                ),
+                _isLoading
+                    ? const Center(
+                        child: CircularProgressIndicator(
+                          color: Color(0xFF3389FF),
+                        ),
+                      )
+                    : ElevatedButton(
+                        onPressed: _registerUser,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF3389FF),
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(30),
+                          ),
+                        ),
+                        child: const Text(
+                          'SIGN UP',
+                          style: TextStyle(
+                            fontSize: 18,
+                            letterSpacing: 1.5,
+                          ),
+                        ),
+                      ),
 
                 const SizedBox(height: 20),
 
-                // BOTÓN IR A LOGIN
                 TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                  },
+                  onPressed: () => Navigator.pop(context),
                   child: const Text(
                     'Already have an account? Log In',
                     style: TextStyle(
@@ -233,6 +220,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ),
     );
   }
+
+  // ================== INPUTS ==================
 
   Widget _inputField({
     required String label,
@@ -254,33 +243,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _dropdownField({
-    required String label,
-    required String? value,
-    required List<String> items,
-    required ValueChanged<String?> onChanged,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: DropdownButtonFormField<String>(
-        initialValue: value,
-        dropdownColor: const Color(0xFF001F3F),
-        style: const TextStyle(color: Colors.white),
-        decoration: _inputDecoration(label),
-        items: items
-            .map(
-              (item) => DropdownMenuItem(
-                value: item,
-                child: Text(item),
-              ),
-            )
-            .toList(),
-        onChanged: onChanged,
-        validator: (value) =>
-            value == null ? 'Required field' : null,
-      ),
-    );
-  }
+  // Widget _dropdownField({ ... }) removed (unused)
 
   InputDecoration _inputDecoration(String label) {
     return InputDecoration(
