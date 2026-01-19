@@ -19,7 +19,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final TextEditingController passwordController = TextEditingController();
 
   bool _obscurePassword = true;
-
   String? documentType;
   String? country;
   String? city;
@@ -33,7 +32,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     'Otro',
   ];
 
-  // ================== PAÍSES ==================
   final List<String> countries = [
     'Argentina',
     'Australia',
@@ -55,26 +53,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
     'Sudáfrica',
   ];
 
-  // ...existing code...
   final Map<String, List<String>> citiesByCountry = {
-    'Argentina': [ 'Buenos Aires', 'Córdoba', 'Rosario', 'Mendoza', 'La Plata' ],
-    'Australia': [ 'Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide' ],
-    'Brasil': [ 'São Paulo', 'Rio de Janeiro', 'Brasília', 'Salvador', 'Fortaleza' ],
-    'Canadá': [ 'Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa' ],
-    'Chile': [ 'Santiago', 'Valparaíso', 'Concepción', 'Antofagasta', 'La Serena' ],
-    'China': [ 'Beijing', 'Shanghai', 'Shenzhen', 'Guangzhou', 'Chengdu' ],
-    'Colombia': [ 'Bogotá', 'Medellín', 'Cali', 'Barranquilla', 'Cartagena' ],
-    'España': [ 'Madrid', 'Barcelona', 'Valencia', 'Sevilla', 'Zaragoza' ],
-    'Estados Unidos': [ 'New York', 'Los Angeles', 'Chicago', 'Miami', 'Houston' ],
-    'Francia': [ 'Paris', 'Marseille', 'Lyon', 'Toulouse', 'Nice' ],
-    'Alemania': [ 'Berlin', 'Munich', 'Hamburg', 'Frankfurt', 'Cologne' ],
-    'India': [ 'New Delhi', 'Mumbai', 'Bangalore', 'Chennai', 'Hyderabad' ],
-    'Italia': [ 'Rome', 'Milan', 'Naples', 'Turin', 'Florence' ],
-    'Japón': [ 'Tokyo', 'Osaka', 'Kyoto', 'Yokohama', 'Sapporo' ],
-    'México': [ 'Ciudad de México', 'Monterrey', 'Guadalajara', 'Puebla', 'Cancún' ],
-    'Perú': [ 'Lima', 'Arequipa', 'Trujillo', 'Cusco', 'Piura' ],
-    'Reino Unido': [ 'London', 'Manchester', 'Birmingham', 'Liverpool', 'Edinburgh' ],
-    'Sudáfrica': [ 'Johannesburg', 'Cape Town', 'Durban', 'Pretoria', 'Port Elizabeth' ],
+    'Argentina': ['Buenos Aires', 'Córdoba', 'Rosario', 'Mendoza', 'La Plata'],
+    'Australia': ['Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide'],
+    'Brasil': ['São Paulo', 'Rio de Janeiro', 'Brasília', 'Salvador', 'Fortaleza'],
+    'Canadá': ['Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa'],
+    'Chile': ['Santiago', 'Valparaíso', 'Concepción', 'Antofagasta', 'La Serena'],
+    'China': ['Beijing', 'Shanghai', 'Shenzhen', 'Guangzhou', 'Chengdu'],
+    'Colombia': ['Bogotá', 'Medellín', 'Cali', 'Barranquilla', 'Cartagena'],
+    'España': ['Madrid', 'Barcelona', 'Valencia', 'Sevilla', 'Zaragoza'],
+    'Estados Unidos': ['New York', 'Los Angeles', 'Chicago', 'Miami', 'Houston'],
+    'Francia': ['Paris', 'Marseille', 'Lyon', 'Toulouse', 'Nice'],
+    'Alemania': ['Berlin', 'Munich', 'Hamburg', 'Frankfurt', 'Cologne'],
+    'India': ['New Delhi', 'Mumbai', 'Bangalore', 'Chennai', 'Hyderabad'],
+    'Italia': ['Rome', 'Milan', 'Naples', 'Turin', 'Florence'],
+    'Japón': ['Tokyo', 'Osaka', 'Kyoto', 'Yokohama', 'Sapporo'],
+    'México': ['Ciudad de México', 'Monterrey', 'Guadalajara', 'Puebla', 'Cancún'],
+    'Perú': ['Lima', 'Arequipa', 'Trujillo', 'Cusco', 'Piura'],
+    'Reino Unido': ['London', 'Manchester', 'Birmingham', 'Liverpool', 'Edinburgh'],
+    'Sudáfrica': ['Johannesburg', 'Cape Town', 'Durban', 'Pretoria', 'Port Elizabeth'],
   };
 
   @override
@@ -88,28 +85,40 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Future<void> _registerUser() async {
     if (!_formKey.currentState!.validate()) return;
+
     setState(() => _isLoading = true);
+
     try {
       await AuthService.register(
         email: emailController.text.trim(),
         password: passwordController.text.trim(),
         fullName: fullNameController.text.trim(),
+        documentType: documentType,
+        documentNumber: documentNumberController.text.trim(),
+        country: country,
+        city: city,
       );
+
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Registro exitoso'),
           backgroundColor: Colors.green,
         ),
       );
+
       await Future.delayed(const Duration(milliseconds: 500));
+
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/home');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error: ${e.toString().replaceAll("Exception:", "").trim()}'),
+          content: Text(
+            'Error: ${e.toString().replaceAll("Exception:", "").trim()}',
+          ),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -147,13 +156,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
                 const SizedBox(height: 30),
 
-                // Full Name
                 _inputField(
                   label: 'Full Name',
                   controller: fullNameController,
                 ),
 
-                // Document Type Dropdown
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: DropdownButtonFormField<String>(
@@ -167,19 +174,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               child: Text(type),
                             ))
                         .toList(),
-                    onChanged: (value) => setState(() => documentType = value),
-                    validator: (value) => value == null || value.isEmpty ? 'Required field' : null,
+                    onChanged: (value) =>
+                        setState(() => documentType = value),
+                    validator: (value) =>
+                        value == null || value.isEmpty ? 'Required field' : null,
                   ),
                 ),
 
-                // Document Number
                 _inputField(
                   label: 'Document Number',
                   controller: documentNumberController,
                   keyboardType: TextInputType.number,
                 ),
 
-                // Country Dropdown
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: DropdownButtonFormField<String>(
@@ -199,11 +206,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         city = null;
                       });
                     },
-                    validator: (value) => value == null || value.isEmpty ? 'Required field' : null,
+                    validator: (value) =>
+                        value == null || value.isEmpty ? 'Required field' : null,
                   ),
                 ),
 
-                // City/State Dropdown (dependiente de country)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: DropdownButtonFormField<String>(
@@ -211,7 +218,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     dropdownColor: const Color(0xFF001F3F),
                     decoration: _inputDecoration('City/State'),
                     style: const TextStyle(color: Colors.white),
-                    items: (country != null && citiesByCountry[country!] != null)
+                    items: country != null
                         ? citiesByCountry[country!]!
                             .map((cityName) => DropdownMenuItem(
                                   value: cityName,
@@ -220,18 +227,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             .toList()
                         : [],
                     onChanged: (value) => setState(() => city = value),
-                    validator: (value) => value == null || value.isEmpty ? 'Required field' : null,
+                    validator: (value) =>
+                        value == null || value.isEmpty ? 'Required field' : null,
                   ),
                 ),
 
-                // Email
                 _inputField(
                   label: 'Email',
                   controller: emailController,
                   keyboardType: TextInputType.emailAddress,
                 ),
 
-                // Password
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: TextFormField(
@@ -241,15 +247,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     decoration: _inputDecoration('Password').copyWith(
                       suffixIcon: IconButton(
                         icon: Icon(
-                          _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                          _obscurePassword
+                              ? Icons.visibility_off
+                              : Icons.visibility,
                           color: Colors.white,
                         ),
-                        tooltip: _obscurePassword ? 'Mostrar contraseña' : 'Ocultar contraseña',
-                        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
                       ),
                     ),
-                    validator: (value) =>
-                        value == null || value.isEmpty ? 'Required field' : null,
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Required field';
+                      }
+                      if (value.length < 8) {
+                        return 'La contraseña debe tener al menos 8 caracteres';
+                      }
+                      if (!RegExp(r'[A-Z]').hasMatch(value)) {
+                        return 'Debe contener al menos una mayúscula';
+                      }
+                      if (!RegExp(r'[0-9]').hasMatch(value)) {
+                        return 'Debe contener al menos un número';
+                      }
+                      if (!RegExp(r'[!@#\$&*~%^?¿.,;:_\-]')
+                          .hasMatch(value)) {
+                        return 'Debe contener al menos un carácter especial';
+                      }
+                      return null;
+                    },
                   ),
                 ),
 
@@ -272,10 +298,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                         child: const Text(
                           'SIGN UP',
-                          style: TextStyle(
-                            fontSize: 18,
-                            letterSpacing: 1.5,
-                          ),
+                          style: TextStyle(fontSize: 18, letterSpacing: 1.5),
                         ),
                       ),
 
@@ -291,6 +314,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ),
                   ),
                 ),
+
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: GestureDetector(
+                    onTap: () => _showPrivacyDialog(context),
+                    child: const Text(
+                      'Al registrarte, aceptas nuestra Política de Privacidad.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        decoration: TextDecoration.underline,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -299,7 +338,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  // ================== INPUTS ==================
+  void _showPrivacyDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Política de Privacidad'),
+        content: SingleChildScrollView(
+          child: Text(_privacyText),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cerrar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static const String _privacyText = '''
+Política de Privacidad - Orbit
+Fecha de entrada en vigor: 18/01/2026
+...
+''';
 
   Widget _inputField({
     required String label,
@@ -320,8 +381,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ),
     );
   }
-
-  // Widget _dropdownField({ ... }) removed (unused)
 
   InputDecoration _inputDecoration(String label) {
     return InputDecoration(

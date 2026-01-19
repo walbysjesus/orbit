@@ -1,5 +1,6 @@
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -9,6 +10,10 @@ class AuthService {
     required String email,
     required String password,
     String? fullName,
+    String? documentType,
+    String? documentNumber,
+    String? country,
+    String? city,
   }) async {
     try {
       final cred = await _auth.createUserWithEmailAndPassword(
@@ -22,9 +27,42 @@ class AuthService {
       if (fullName != null) {
         await user.updateDisplayName(fullName);
       }
+      // Guardar datos en Firestore
+      await _saveUserData(
+        uid: user.uid,
+        email: email,
+        fullName: fullName,
+        documentType: documentType,
+        documentNumber: documentNumber,
+        country: country,
+        city: city,
+      );
     } on FirebaseAuthException catch (e) {
       throw Exception(_firebaseError(e.code));
     }
+  }
+
+  static Future<void> _saveUserData({
+    required String uid,
+    required String email,
+    String? fullName,
+    String? documentType,
+    String? documentNumber,
+    String? country,
+    String? city,
+  }) async {
+    // Importar cloud_firestore arriba si no está
+    // import 'package:cloud_firestore/cloud_firestore.dart';
+    final firestore = FirebaseFirestore.instance;
+    await firestore.collection('users').doc(uid).set({
+      'email': email,
+      'fullName': fullName,
+      'documentType': documentType,
+      'documentNumber': documentNumber,
+      'country': country,
+      'city': city,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
   }
 
   // ================== LOGIN ==================
