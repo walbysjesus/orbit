@@ -109,7 +109,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(e.toString()),
+          content: Text('Error: ${e.toString().replaceAll("Exception:", "").trim()}'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -147,13 +147,91 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
                 const SizedBox(height: 30),
 
+                // Full Name
                 _inputField(
                   label: 'Full Name',
                   controller: fullNameController,
                 ),
 
-                  // ...continúan los campos del formulario...
+                // Document Type Dropdown
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: documentType,
+                    dropdownColor: const Color(0xFF001F3F),
+                    decoration: _inputDecoration('Document Type'),
+                    style: const TextStyle(color: Colors.white),
+                    items: documentTypes
+                        .map((type) => DropdownMenuItem(
+                              value: type,
+                              child: Text(type),
+                            ))
+                        .toList(),
+                    onChanged: (value) => setState(() => documentType = value),
+                    validator: (value) => value == null || value.isEmpty ? 'Required field' : null,
+                  ),
+                ),
 
+                // Document Number
+                _inputField(
+                  label: 'Document Number',
+                  controller: documentNumberController,
+                  keyboardType: TextInputType.number,
+                ),
+
+                // Country Dropdown
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: country,
+                    dropdownColor: const Color(0xFF001F3F),
+                    decoration: _inputDecoration('Country'),
+                    style: const TextStyle(color: Colors.white),
+                    items: countries
+                        .map((c) => DropdownMenuItem(
+                              value: c,
+                              child: Text(c),
+                            ))
+                        .toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        country = value;
+                        city = null;
+                      });
+                    },
+                    validator: (value) => value == null || value.isEmpty ? 'Required field' : null,
+                  ),
+                ),
+
+                // City/State Dropdown (dependiente de country)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: city,
+                    dropdownColor: const Color(0xFF001F3F),
+                    decoration: _inputDecoration('City/State'),
+                    style: const TextStyle(color: Colors.white),
+                    items: (country != null && citiesByCountry[country!] != null)
+                        ? citiesByCountry[country!]!
+                            .map((cityName) => DropdownMenuItem(
+                                  value: cityName,
+                                  child: Text(cityName),
+                                ))
+                            .toList()
+                        : [],
+                    onChanged: (value) => setState(() => city = value),
+                    validator: (value) => value == null || value.isEmpty ? 'Required field' : null,
+                  ),
+                ),
+
+                // Email
+                _inputField(
+                  label: 'Email',
+                  controller: emailController,
+                  keyboardType: TextInputType.emailAddress,
+                ),
+
+                // Password
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: TextFormField(
