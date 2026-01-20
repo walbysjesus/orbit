@@ -37,12 +37,19 @@ class OrbitIAService {
     );
 
     // 2️⃣ Contexto cognitivo (lo que Orbit "sabe ahora")
+    // TODO: Integrar servicios reales de clima y red aquí
+    // Ejemplo profesional: inyección desacoplada de contexto externo
+    const weatherCondition = WeatherCondition.rain; // Simulación: lluvia
+    const networkQuality = "good"; // Simulación: buena red
+
     final context = OrbitContext(
       conversationId: conversationId,
       userId: userId,
       shortTermMemory: conversationState.shortTermMemory.snapshot(),
       longTermMemory: conversationState.longTermMemory.export(),
       lastIntent: conversationState.activeIntent,
+      weatherCondition: weatherCondition,
+      networkQuality: networkQuality,
     );
 
     // 3️⃣ La IA PIENSA (NO responde)

@@ -1,3 +1,5 @@
+import 'decision_engine.dart';
+
 class OrbitContext {
   final String conversationId;
   final String userId;
@@ -8,6 +10,10 @@ class OrbitContext {
   String? lastIntent;
   DateTime lastInteraction;
 
+  // Propiedades opcionales para contexto extendido (clima y red)
+  final WeatherCondition? _weatherCondition;
+  final String? _networkQuality;
+
   OrbitContext({
     required this.conversationId,
     required this.userId,
@@ -15,9 +21,16 @@ class OrbitContext {
     Map<String, dynamic>? longTermMemory,
     this.lastIntent,
     DateTime? lastInteraction,
+    WeatherCondition? weatherCondition,
+    String? networkQuality,
   })  : shortTermMemory = shortTermMemory ?? {},
         longTermMemory = longTermMemory ?? {},
-        lastInteraction = lastInteraction ?? DateTime.now();
+        lastInteraction = lastInteraction ?? DateTime.now(),
+        _weatherCondition = weatherCondition,
+        _networkQuality = networkQuality;
+  // Getters seguros para compatibilidad con lógica existente
+  WeatherCondition get weatherCondition => _weatherCondition ?? WeatherCondition.unknown;
+  String get networkQuality => _networkQuality ?? 'unknown';
 
   void updateLastIntent(String intent) {
     lastIntent = intent;

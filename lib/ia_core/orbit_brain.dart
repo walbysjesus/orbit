@@ -28,6 +28,14 @@ class OrbitBrain {
 
     context.rememberShortTerm('last_message', message);
 
+    // 🛰️ Registrar mensaje del sistema (clima, red, seguridad)
+    if (decision.systemMessage != null) {
+      context.rememberShortTerm(
+        'system_alert',
+        decision.systemMessage!,
+      );
+    }
+
     return decision;
   }
 }
