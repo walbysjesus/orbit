@@ -1,3 +1,4 @@
+import '../../utils/camera_icon_button.dart';
 import 'package:flutter/material.dart';
 import '../../models/orbit_user.dart';
 
@@ -183,13 +184,15 @@ class _ContactsScreenState extends State<ContactsScreen> {
   // ================== UI ==================
   @override
   Widget build(BuildContext context) {
+    // Contactos modo PRO: búsqueda avanzada y botón elegante
     return Scaffold(
       appBar: AppBar(
         title: const Text('Contactos'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: _addContact,
+          CameraIconButton(
+            icon: Icons.add,
+            tooltip: 'Agregar contacto',
+            onTap: _addContact,
           ),
         ],
       ),
@@ -197,44 +200,67 @@ class _ContactsScreenState extends State<ContactsScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.all(12),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'Buscar contacto...',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Búsqueda avanzada (nombre, email, empresa...)',
+                      prefixIcon: const Icon(Icons.search),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onChanged: _filterContacts,
+                  ),
                 ),
-              ),
-              onChanged: _filterContacts,
+                const SizedBox(width: 10),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.person_add, color: Colors.white),
+                  label: const Text('Agregar', style: TextStyle(color: Colors.white)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF3389FF),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+                  ),
+                  onPressed: _addContact,
+                ),
+              ],
             ),
           ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _filtered.isEmpty
-                    ? const Center(child: Text('No hay contactos'))
+                    ? const Center(child: Text('No hay contactos', style: TextStyle(color: Colors.white70)))
                     : ListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                         itemCount: _filtered.length,
                         itemBuilder: (_, index) {
                           final contact = _filtered[index];
-                          return ListTile(
-                            leading: const Icon(Icons.person),
-                            title: Text(contact.fullName ?? ''),
-                            subtitle: Text(contact.email ?? ''),
-                            trailing: Wrap(
-                              spacing: 8,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.edit),
-                                  onPressed: () =>
-                                      _editContact(index),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.delete),
-                                  onPressed: () =>
-                                      _deleteContact(index),
-                                ),
-                              ],
+                          return Card(
+                            elevation: 2,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                            child: ListTile(
+                              leading: const Icon(Icons.person, color: Color(0xFF3389FF)),
+                              title: Text(contact.fullName ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
+                              subtitle: Text(contact.email ?? '', style: const TextStyle(color: Colors.black54)),
+                              trailing: Wrap(
+                                spacing: 8,
+                                children: [
+                                  CameraIconButton(
+                                    icon: Icons.edit,
+                                    tooltip: 'Editar contacto',
+                                    onTap: () => _editContact(index),
+                                  ),
+                                  CameraIconButton(
+                                    icon: Icons.delete,
+                                    tooltip: 'Eliminar contacto',
+                                    onTap: () => _deleteContact(index),
+                                  ),
+                                ],
+                              ),
                             ),
                           );
                         },

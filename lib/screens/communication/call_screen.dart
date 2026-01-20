@@ -1,3 +1,4 @@
+import '../../utils/camera_icon_button.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -17,6 +18,20 @@ class _CallScreenState extends State<CallScreen> {
         content: Text(message, style: const TextStyle(color: Colors.white)),
         backgroundColor: color,
         actions: [
+          CameraIconButton(
+            icon: Icons.camera_alt,
+            tooltip: 'Tomar foto',
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Función tomar foto')));
+            },
+          ),
+          CameraIconButton(
+            icon: Icons.videocam,
+            tooltip: 'Grabar video',
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Función grabar video')));
+            },
+          ),
           TextButton(
             child: const Text('Cerrar', style: TextStyle(color: Colors.white)),
             onPressed: () => ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
@@ -178,33 +193,39 @@ class _CallScreenState extends State<CallScreen> {
           );
         },
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        backgroundColor: const Color(0xFF001F3F),
-        selectedItemColor: Colors.white,
-        unselectedItemColor: Colors.white54,
-        onTap: (i) {
-          setState(() => _currentIndex = i);
-          _pageController.animateToPage(i, duration: const Duration(milliseconds: 350), curve: Curves.easeInOut);
-        },
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.history),
-            label: 'Recientes',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.star),
-            label: 'Favoritos',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.contacts),
-            label: 'Contactos',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.calendar_month),
-            label: 'Calendario',
-          ),
-        ],
+      bottomNavigationBar: Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF001F3F),
+          boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8)],
+        ),
+        child: BottomNavigationBar(
+          currentIndex: _currentIndex,
+          backgroundColor: Colors.transparent,
+          selectedItemColor: Colors.white,
+          unselectedItemColor: Colors.white70,
+          onTap: (i) {
+            setState(() => _currentIndex = i);
+            _pageController.animateToPage(i, duration: const Duration(milliseconds: 350), curve: Curves.easeInOut);
+          },
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.history, color: Colors.white),
+              label: 'Recientes',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.star, color: Colors.white),
+              label: 'Favoritos',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.contacts, color: Colors.white),
+              label: 'Contactos',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.calendar_month, color: Colors.white),
+              label: 'Calendario',
+            ),
+          ],
+        ),
       ),
     );
   }

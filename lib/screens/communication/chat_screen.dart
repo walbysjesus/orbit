@@ -1,3 +1,4 @@
+import '../../utils/camera_icon_button.dart';
 import 'dart:convert';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:file_picker/file_picker.dart';
@@ -5,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../utils/audio_record_indicator.dart';
 
 
 
@@ -162,9 +164,24 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Mejora UX: indicador de grabación y reproducción de audio
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.contactNameOrId),
+        // Cabecera: nombre táctil para abrir perfil
+        title: GestureDetector(
+          onTap: () {
+            // Demo: abrir perfil del contacto
+            showDialog(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: Text('Perfil de ${widget.contactNameOrId}'),
+                content: const Text('Aquí se mostraría la información del contacto.'),
+                actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cerrar'))],
+              ),
+            );
+          },
+          child: Text(widget.contactNameOrId, style: const TextStyle(decoration: TextDecoration.underline)),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.attach_file),
@@ -175,6 +192,14 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Column(
         children: [
           if (_banner != null) _banner!,
+          if (_isRecording || (_messages.isNotEmpty && _messages.last['audioPath'] != null))
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: AudioRecordIndicator(
+                isRecording: _isRecording,
+                audioPath: _messages.isNotEmpty ? _messages.last['audioPath'] : null,
+              ),
+            ),
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(12),
@@ -187,6 +212,33 @@ class _ChatScreenState extends State<ChatScreen> {
                 try {
                   text = _encrypter.decrypt64(text, iv: _iv);
                 } catch (_) {}
+
+                if (msg['audioPath'] != null) {
+                  return Align(
+                    alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: isMe ? Colors.blue : Colors.grey[700],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.play_arrow, color: Colors.white),
+                            onPressed: () {
+                              // Aquí se podría reproducir el audio
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Reproduciendo nota de voz (demo)')));
+                            },
+                          ),
+                          const Text('Nota de voz', style: TextStyle(color: Colors.white)),
+                        ],
+                      ),
+                    ),
+                  );
+                }
 
                 return Align(
                   alignment:
@@ -207,20 +259,50 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           Row(
             children: [
-              IconButton(
-                icon: Icon(_isRecording ? Icons.stop : Icons.mic),
-                onPressed: _toggleRecording,
+              CameraIconButton(
+                icon: _isRecording ? Icons.stop : Icons.mic,
+                tooltip: _isRecording ? 'Detener grabación' : 'Grabar nota de voz',
+                onTap: _toggleRecording,
+              ),
+              CameraIconButton(
+                icon: Icons.camera_alt,
+                tooltip: 'Tomar foto',
+                onTap: () {
+                  // Acción de tomar foto (puedes integrar image_picker aquí)
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Función tomar foto')));
+                },
+              ),
+              CameraIconButton(
+                icon: Icons.videocam,
+                tooltip: 'Grabar video',
+                onTap: () {
+                  // Acción de grabar video (puedes integrar image_picker aquí)
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Función grabar video')));
+                },
               ),
               Expanded(
                 child: TextField(
                   controller: _controller,
-                  decoration:
-                      const InputDecoration(hintText: 'Mensaje...'),
+                  decoration: const InputDecoration(hintText: 'Mensaje...'),
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.send),
-                onPressed: _sendMessage,
+              CameraIconButton(
+                icon: Icons.emoji_emotions,
+                tooltip: 'Emojis/Stickers',
+                onTap: () {
+                  showModalBottomSheet(
+                    context: context,
+                    builder: (ctx) => SizedBox(
+                      height: 180,
+                      child: Center(child: Text('Selector de emojis/stickers', style: TextStyle(color: Colors.white))),
+                    ),
+                  );
+                },
+              ),
+              CameraIconButton(
+                icon: Icons.send,
+                tooltip: 'Enviar mensaje',
+                onTap: _sendMessage,
               ),
             ],
           ),

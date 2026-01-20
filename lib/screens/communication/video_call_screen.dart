@@ -1,3 +1,4 @@
+import '../../utils/camera_icon_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:flutter/scheduler.dart';
@@ -193,6 +194,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Mejora UX: opciones para añadir/invitar contactos y contador de tiempo solo cuando la llamada es contestada
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -216,10 +218,16 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                     child: RTCVideoView(_remoteRenderer, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain),
                   ),
                   const SizedBox(height: 12),
-                  Semantics(
-                    label: 'Duración de la llamada',
-                    child: Text('⏱ $_callDuration', style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                  ),
+                  if (_peerConnection != null && _remoteRenderer.srcObject != null)
+                    Positioned(
+                      top: 12,
+                      left: 0,
+                      right: 0,
+                      child: Semantics(
+                        label: 'Duración de la llamada',
+                        child: Text('⏱ $_callDuration', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -277,6 +285,38 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   },
                 ),
                 _controlButton(
+                  icon: Icons.person_add,
+                  color: Colors.white,
+                  semanticLabel: 'Añadir contacto a llamada',
+                  onTap: () {
+                    // Demo: añadir contacto
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Añadir contacto'),
+                        content: const Text('Funcionalidad para añadir contacto a la llamada.'),
+                        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cerrar'))],
+                      ),
+                    );
+                  },
+                ),
+                _controlButton(
+                  icon: Icons.link,
+                  color: Colors.white,
+                  semanticLabel: 'Invitar a llamada',
+                  onTap: () {
+                    // Demo: invitar a llamada
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Invitar a llamada'),
+                        content: const Text('Funcionalidad para invitar a la llamada.'),
+                        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cerrar'))],
+                      ),
+                    );
+                  },
+                ),
+                _controlButton(
                   icon: Icons.call_end,
                   color: Colors.red,
                   semanticLabel: 'Finalizar llamada',
@@ -296,16 +336,14 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     required VoidCallback onTap,
     String? semanticLabel,
   }) {
+    // Control PRO con feedback visual
     return Semantics(
       label: semanticLabel,
       button: true,
-      child: GestureDetector(
+      child: CameraIconButton(
+        icon: icon,
+        tooltip: semanticLabel ?? '',
         onTap: onTap,
-        child: CircleAvatar(
-          radius: 28,
-          backgroundColor: Colors.black54,
-          child: Icon(icon, color: color, size: 28),
-        ),
       ),
     );
   }

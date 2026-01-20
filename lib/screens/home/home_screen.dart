@@ -79,6 +79,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Ajuste visual: SafeArea + SingleChildScrollView para evitar overflow en pantallas pequeñas/teclado
     return Scaffold(
       backgroundColor: Colors.grey.shade100,
 
@@ -90,81 +91,86 @@ class _HomeScreenState extends State<HomeScreen> {
         elevation: 0,
       ),
 
-      body: Column(
-        children: [
-          if (_feedbackMsg != null)
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Text(_feedbackMsg!, style: const TextStyle(color: Colors.redAccent)),
-            ),
-          // STATUS BAR (clave para Orbit)
-          Container(
-            padding: const EdgeInsets.all(12),
-            margin: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.satellite_alt, color: _isNetworkStable ? Colors.green : Colors.red),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    _isNetworkStable ? 'Red satelital activa · Señal estable' : 'Red satelital inactiva · Sin señal',
-                    style: const TextStyle(color: Colors.white),
-                  ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              if (_feedbackMsg != null)
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Text(_feedbackMsg!, style: const TextStyle(color: Colors.redAccent)),
                 ),
-              ],
-            ),
-          ),
+              // STATUS BAR (clave para Orbit)
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.satellite_alt, color: _isNetworkStable ? Colors.green : Colors.red),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _isNetworkStable ? 'Red satelital activa · Señal estable' : 'Red satelital inactiva · Sin señal',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
 
-          // QUICK ACTIONS
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: GridView.count(
-              shrinkWrap: true,
-              crossAxisCount: 2,
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 1.2,
-              physics: const NeverScrollableScrollPhysics(),
-              children: [
-                _ActionCard(
-                  icon: Icons.psychology,
-                  title: 'Orbit IA',
-                  onTap: () => _open(context, const OrbitIAScreen()),
+              // QUICK ACTIONS
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: GridView.count(
+                  shrinkWrap: true,
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: 1.2,
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: [
+                    _ActionCard(
+                      icon: Icons.psychology,
+                      title: 'Orbit IA',
+                      onTap: () => _open(context, const OrbitIAScreen()),
+                    ),
+                    _ActionCard(
+                      icon: Icons.camera_alt,
+                      title: 'Estados',
+                      onTap: () => _open(context, const StatusScreen()),
+                    ),
+                    _ActionCard(
+                      icon: Icons.call,
+                      title: 'Llamada',
+                      onTap: () => _open(context, const CallScreen()),
+                    ),
+                    _ActionCard(
+                      icon: Icons.chat,
+                      title: 'Chat',
+                      onTap: () => _open(context, ChatScreen(contactNameOrId: _displayName)),
+                    ),
+                    _ActionCard(
+                      icon: Icons.videocam,
+                      title: 'Video',
+                      onTap: () => _open(context, const VideoCallScreen()),
+                    ),
+                  ],
                 ),
-                _ActionCard(
-                  icon: Icons.camera_alt,
-                  title: 'Estados',
-                  onTap: () => _open(context, const StatusScreen()),
-                ),
-                _ActionCard(
-                  icon: Icons.call,
-                  title: 'Llamada',
-                  onTap: () => _open(context, const CallScreen()),
-                ),
-                _ActionCard(
-                  icon: Icons.chat,
-                  title: 'Chat',
-                  onTap: () => _open(context, ChatScreen(contactNameOrId: _displayName)),
-                ),
-                _ActionCard(
-                  icon: Icons.videocam,
-                  title: 'Video',
-                  onTap: () => _open(context, const VideoCallScreen()),
-                ),
-              ],
-            ),
-          ),
+              ),
 
-          const SizedBox(height: 12),
+              const SizedBox(height: 12),
 
-          Expanded(
-            child: _pages[_currentIndex],
+              SizedBox(
+                height: MediaQuery.of(context).size.height * 0.45,
+                child: _pages[_currentIndex],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
 
       bottomNavigationBar: BottomNavigationBar(

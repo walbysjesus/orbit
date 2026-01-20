@@ -1,7 +1,8 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
+
 import '../../services/orbit_ia_service.dart';
 import '../../models/orbit_ia_message.dart';
-
 
 class OrbitIAScreen extends StatefulWidget {
   const OrbitIAScreen({super.key});
@@ -13,49 +14,85 @@ class OrbitIAScreen extends StatefulWidget {
 class _OrbitIAScreenState extends State<OrbitIAScreen> {
   final TextEditingController _controller = TextEditingController();
   final List<OrbitIAMessage> _messages = [];
+
+  final String _conversationId =
+      'conv_${DateTime.now().millisecondsSinceEpoch}';
+
   bool _loading = false;
   String? _errorMsg;
   String? _userId;
 
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
-    if (text.isEmpty) return;
-    setState(() { _errorMsg = null; });
+    if (text.isEmpty || _loading) return;
+
+    setState(() {
+      _errorMsg = null;
+      _loading = true;
+    });
+
+    final userId = _userId ?? await _getUserId();
+
     final userMessage = OrbitIAMessage(
+      id: _generateId(),
+      conversationId: _conversationId,
       text: text,
       isUser: true,
-      timestamp: DateTime.now(),
     );
+
     setState(() {
       _messages.add(userMessage);
-      _loading = true;
       _controller.clear();
     });
+
     try {
-      final userId = _userId ?? await _getUserId();
       final response = await OrbitIAService.sendMessage(
         userId: userId,
+        conversationId: _conversationId,
         message: text,
       );
+
       final iaMessage = OrbitIAMessage(
+        id: _generateId(),
+        conversationId: _conversationId,
         text: response,
         isUser: false,
-        timestamp: DateTime.now(),
+        metadata: const {
+          'source': 'orbit_local_ia',
+        },
       );
-      setState(() => _messages.add(iaMessage));
-    } catch (e) {
-      setState(() { _errorMsg = 'Error en Orbit IA: ${e.toString().replaceAll("Exception:", "").trim()}'; });
-    }
-    if (mounted) {
-      setState(() => _loading = false);
-    }
 
+      if (mounted) {
+        setState(() => _messages.add(iaMessage));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMsg = 'Orbit tuvo un problema al responder 😅';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
   }
 
   Future<String> _getUserId() async {
-    // Aquí deberías obtener el userId real del usuario autenticado
-    // Ejemplo: final user = await AuthService.getCurrentUser(); return user?.orbitId ?? 'USER_ID';
-    return 'USER_ID';
+    // En el futuro: AuthService / Firebase / JWT
+    _userId ??= 'USER_${DateTime.now().millisecondsSinceEpoch}';
+    return _userId!;
+  }
+
+  String _generateId() {
+    final rand = Random().nextInt(999999);
+    return 'msg_${DateTime.now().millisecondsSinceEpoch}_$rand';
   }
 
   @override
@@ -66,12 +103,17 @@ class _OrbitIAScreenState extends State<OrbitIAScreen> {
         children: [
           if (_errorMsg != null)
             Padding(
-              padding: const EdgeInsets.all(8.0),
+              padding: const EdgeInsets.all(8),
               child: Row(
                 children: [
                   const Icon(Icons.error_outline, color: Colors.redAccent),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(_errorMsg!, style: const TextStyle(color: Colors.redAccent))),
+                  Expanded(
+                    child: Text(
+                      _errorMsg!,
+                      style: const TextStyle(color: Colors.redAccent),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -81,25 +123,25 @@ class _OrbitIAScreenState extends State<OrbitIAScreen> {
               itemCount: _messages.length,
               itemBuilder: (_, i) {
                 final msg = _messages[i];
-                return Semantics(
-                  label: msg.isUser ? 'Mensaje enviado' : 'Respuesta IA',
-                  child: Align(
-                    alignment:
-                        msg.isUser ? Alignment.centerRight : Alignment.centerLeft,
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      margin: const EdgeInsets.symmetric(vertical: 6),
-                      decoration: BoxDecoration(
+                return Align(
+                  alignment: msg.isUser
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    margin: const EdgeInsets.symmetric(vertical: 6),
+                    decoration: BoxDecoration(
+                      color: msg.isUser
+                          ? Colors.blueAccent
+                          : Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Text(
+                      msg.text,
+                      style: TextStyle(
                         color: msg.isUser
-                            ? Colors.blue
-                            : Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        msg.text,
-                        style: TextStyle(
-                          color: msg.isUser ? Colors.white : Colors.black,
-                        ),
+                            ? Colors.white
+                            : Colors.grey.shade900,
                       ),
                     ),
                   ),
@@ -107,8 +149,7 @@ class _OrbitIAScreenState extends State<OrbitIAScreen> {
               },
             ),
           ),
-          if (_loading)
-            const LinearProgressIndicator(minHeight: 3, color: Colors.blueAccent),
+          if (_loading) const LinearProgressIndicator(minHeight: 3),
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
@@ -116,14 +157,16 @@ class _OrbitIAScreenState extends State<OrbitIAScreen> {
                 Expanded(
                   child: TextField(
                     controller: _controller,
-                    decoration:
-                        const InputDecoration(hintText: 'Habla con Orbit IA'),
+                    decoration: const InputDecoration(
+                      hintText: 'Habla con Orbit…',
+                    ),
+                    onSubmitted: (_) => _sendMessage(),
                   ),
                 ),
                 IconButton(
                   icon: const Icon(Icons.send),
                   onPressed: _loading ? null : _sendMessage,
-                )
+                ),
               ],
             ),
           ),

@@ -1,7 +1,10 @@
+import '../../utils/camera_icon_button.dart';
 import 'package:flutter/material.dart';
 // import '../../services/status_api_service.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import '../../utils/novelty_menu.dart';
+import 'novelty_search_delegate.dart';
 
 class StatusScreen extends StatefulWidget {
   const StatusScreen({super.key});
@@ -56,14 +59,45 @@ class _StatusScreenState extends State<StatusScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF001F3F),
       appBar: AppBar(
-        title: const Text('Estados'),
+        // Título visual cambiado a "Novedades"
+        title: const Text('Novedades'),
         backgroundColor: const Color(0xFF001F3F),
         elevation: 0,
+        leading: NoveltyMenu(
+          onSelected: (value) {
+            // Acciones del menú de tres puntos
+            if (value == 'general') {
+              Navigator.of(context).pushNamed('/settings');
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Opción: $value')),
+              );
+            }
+          },
+        ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add_a_photo),
-            tooltip: 'Agregar estado',
-            onPressed: () {
+          CameraIconButton(
+            icon: Icons.search,
+            tooltip: 'Buscar novedades',
+            onTap: () async {
+              final query = await showSearch<String>(
+                context: context,
+                delegate: NoveltySearchDelegate(_statuses),
+              );
+              if (query != null && query.isNotEmpty) {
+                setState(() {
+                  _statuses = _statuses.where((s) =>
+                    (s['userName'] ?? '').toLowerCase().contains(query.toLowerCase()) ||
+                    (s['text'] ?? '').toLowerCase().contains(query.toLowerCase())
+                  ).toList();
+                });
+              }
+            },
+          ),
+          CameraIconButton(
+            icon: Icons.add_a_photo,
+            tooltip: 'Agregar novedad (foto)',
+            onTap: () {
               showModalBottomSheet(
                 context: context,
                 isScrollControlled: true,
@@ -134,7 +168,7 @@ class _StatusScreenState extends State<StatusScreen> {
                           const SizedBox(height: 16),
                           ElevatedButton.icon(
                             icon: _submitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.send),
-                            label: const Text('Compartir estado'),
+                            label: const Text('Compartir novedad'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF3389FF),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),

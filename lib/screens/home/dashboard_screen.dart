@@ -32,10 +32,11 @@ class _DashboardScreenBodyState extends State<_DashboardScreenBody> {
 
   @override
   Widget build(BuildContext context) {
+    // Ajuste visual: 'Dashboard' -> 'Inicio' y texto blanco
     return Scaffold(
       backgroundColor: const Color(0xFF001F3F),
       appBar: AppBar(
-        title: const Text('Dashboard'),
+        title: const Text('Inicio', style: TextStyle(color: Colors.white)),
         backgroundColor: const Color(0xFF001F3F),
         elevation: 0,
       ),
