@@ -32,7 +32,6 @@ class DecisionEngine {
     context.updateLastIntent(intentResult.type.name);
 
     final weather = context.weatherCondition;
-    final network = context.networkQuality;
 
     // 🌦️ Mensajes de clima pensados para conductores
     String? weatherMessage;

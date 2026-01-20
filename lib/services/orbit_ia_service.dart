@@ -1,3 +1,6 @@
+import 'weather_service.dart';
+import 'network_service.dart';
+import '../ia_core/decision_engine.dart';
 import '../ia_core/orbit_brain.dart';
 import '../ia_core/orbit_context.dart';
 
@@ -37,10 +40,10 @@ class OrbitIAService {
     );
 
     // 2️⃣ Contexto cognitivo (lo que Orbit "sabe ahora")
-    // TODO: Integrar servicios reales de clima y red aquí
-    // Ejemplo profesional: inyección desacoplada de contexto externo
-    const weatherCondition = WeatherCondition.rain; // Simulación: lluvia
-    const networkQuality = "good"; // Simulación: buena red
+
+    // Obtener clima real (ejemplo: lat/lon fijos, reemplazar por GPS real si se desea)
+    final weatherCondition = await WeatherService.getCurrentWeather(lat: 19.4326, lon: -99.1332); // CDMX
+    final networkQuality = await NetworkService.getNetworkQuality();
 
     final context = OrbitContext(
       conversationId: conversationId,
