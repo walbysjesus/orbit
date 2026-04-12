@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:orbit/services/subscription_service.dart';
 
 // ================= WELCOME SCREEN =================
 
@@ -31,126 +32,134 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final sphereSize =
+        math.min(size.width * 0.46, size.height * 0.28).clamp(160.0, 220.0);
+
     return Scaffold(
       backgroundColor: const Color(0xFF001F3F),
       floatingActionButton: const LanguageFab(),
       body: SafeArea(
-        child: Center(
-          child: FadeInWelcome(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const SizedBox(height: 20),
-
-                SizedBox(
-                  height: 80,
-                  child: Image.asset(
-                    'assets/images/logo.png',
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  ),
-                ),
-
-                const SizedBox(height: 8),
-                const Text(
-                  "WELCOME TO",
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 22,
-                    letterSpacing: 2,
-                  ),
-                ),
-
-                const Text(
-                  "ORBIT",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 46,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 3,
-                  ),
-                ),
-
-                const SizedBox(height: 8),
-                const Text(
-                  "Connecting the world, everywhere",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white54,
-                    fontSize: 16,
-                  ),
-                ),
-
-                const SizedBox(height: 32),
-
-                SizedBox(
-                  width: 220,
-                  height: 220,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      AnimatedBuilder(
-                        animation: _controller,
-                        builder: (_, __) {
-                          return CustomPaint(
-                            painter: SpherePainter(
-                              angle: _controller.value * 2 * math.pi,
-                            ),
-                          );
-                        },
-                      ),
-                      const Text(
-                        "ORBIT",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 36,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 3,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Center(
+                  child: FadeInWelcome(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(height: 20),
+                        const Text(
+                          '¡Bienvenido a',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w300,
+                            letterSpacing: 1.2,
+                          ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 24),
+                        SizedBox(
+                          width: sphereSize,
+                          height: sphereSize,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              AnimatedBuilder(
+                                animation: _controller,
+                                builder: (_, __) {
+                                  return CustomPaint(
+                                    painter: SpherePainter(
+                                      angle: _controller.value * 2 * math.pi,
+                                    ),
+                                  );
+                                },
+                              ),
+                              const Text(
+                                'ORBIT',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 36,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 3,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Semantics(
+                          label: 'Conectando el mundo, en todas partes',
+                          child: Text(
+                            'Conectando el mundo, en todas partes',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white54,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 28),
+                        Text(
+                          'Plan actual: ${subscriptionService.level.name.toUpperCase()}',
+                          style: const TextStyle(
+                              color: Colors.white60, fontSize: 14),
+                        ),
+                        const SizedBox(height: 8),
+                        Semantics(
+                          button: true,
+                          label: 'Iniciar sesión',
+                          child: ElevatedButton(
+                            onPressed: () =>
+                                Navigator.pushNamed(context, '/login'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF3389FF),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 32,
+                                vertical: 12,
+                              ),
+                            ),
+                            child: const Text(
+                              'Iniciar sesión',
+                              style:
+                                  TextStyle(fontSize: 18, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Semantics(
+                          button: true,
+                          label: 'Registrarse',
+                          child: TextButton(
+                            onPressed: () =>
+                                Navigator.pushNamed(context, '/register'),
+                            child: const Text(
+                              '¿No tienes cuenta? Regístrate',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 18,
+                                decoration: TextDecoration.underline,
+                                decorationColor: Colors.white70,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-
-                const SizedBox(height: 48),
-
-                ElevatedButton(
-                  onPressed: () =>
-                      Navigator.pushNamed(context, '/login'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF3389FF),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 32,
-                      vertical: 12,
-                    ),
-                  ),
-                  child: const Text(
-                    'Login',
-                    style: TextStyle(fontSize: 18),
-                  ),
-                ),
-
-                const SizedBox(height: 24),
-
-                GestureDetector(
-                  onTap: () =>
-                      Navigator.pushNamed(context, '/register'),
-                  child: const Text(
-                    "Don't have an account?\nSign Up",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 18,
-                      decoration: TextDecoration.underline,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -175,8 +184,8 @@ class _FadeInWelcomeState extends State<FadeInWelcome>
   @override
   void initState() {
     super.initState();
-    _controller =
-        AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
+    _controller = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1200));
     _fade = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
     _controller.forward();
   }
@@ -214,30 +223,35 @@ class _LanguageFabState extends State<LanguageFab> {
 
   @override
   Widget build(BuildContext context) {
-    return FloatingActionButton(
-      backgroundColor: const Color(0xFF3389FF),
-      child: const Icon(Icons.language),
-      onPressed: () async {
-        final result = await showModalBottomSheet<String>(
-          context: context,
-          builder: (_) => Column(
-            mainAxisSize: MainAxisSize.min,
-            children: _langs.entries.map((e) {
-              return ListTile(
-                leading: _selected == e.key
-                    ? const Icon(Icons.check, color: Color(0xFF3389FF))
-                    : null,
-                title: Text(e.value),
-                onTap: () => Navigator.pop(context, e.key),
-              );
-            }).toList(),
-          ),
-        );
+    return Semantics(
+      button: true,
+      label: 'Idioma',
+      child: FloatingActionButton(
+        tooltip: 'Cambiar idioma',
+        backgroundColor: const Color(0xFF3389FF),
+        child: const Icon(Icons.language, semanticLabel: 'Idioma'),
+        onPressed: () async {
+          final result = await showModalBottomSheet<String>(
+            context: context,
+            builder: (_) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: _langs.entries.map((e) {
+                return ListTile(
+                  leading: _selected == e.key
+                      ? const Icon(Icons.check, color: Color(0xFF3389FF))
+                      : null,
+                  title: Text(e.value),
+                  onTap: () => Navigator.pop(context, e.key),
+                );
+              }).toList(),
+            ),
+          );
 
-        if (result != null) {
-          setState(() => _selected = result);
-        }
-      },
+          if (result != null) {
+            setState(() => _selected = result);
+          }
+        },
+      ),
     );
   }
 }

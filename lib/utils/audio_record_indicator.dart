@@ -3,7 +3,20 @@ import 'package:flutter/material.dart';
 class AudioRecordIndicator extends StatelessWidget {
   final bool isRecording;
   final String? audioPath;
-  const AudioRecordIndicator({required this.isRecording, this.audioPath, Key? key}) : super(key: key);
+  final Duration elapsed;
+
+  const AudioRecordIndicator({
+    required this.isRecording,
+    this.audioPath,
+    this.elapsed = Duration.zero,
+    Key? key,
+  }) : super(key: key);
+
+  String _formatDuration(Duration duration) {
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +41,11 @@ class AudioRecordIndicator extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          const Text('Grabando audio...', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+          Text(
+            'Grabando ${_formatDuration(elapsed)}',
+            style: const TextStyle(
+                color: Colors.redAccent, fontWeight: FontWeight.bold),
+          ),
         ],
       );
     } else if (audioPath != null) {
@@ -37,7 +54,8 @@ class AudioRecordIndicator extends StatelessWidget {
         children: [
           const Icon(Icons.play_arrow, color: Colors.green),
           const SizedBox(width: 8),
-          const Text('Nota de voz enviada', style: TextStyle(color: Colors.green)),
+          const Text('Nota de voz enviada',
+              style: TextStyle(color: Colors.green)),
         ],
       );
     }

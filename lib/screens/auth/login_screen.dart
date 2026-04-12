@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
 import '../../utils/ui_helpers.dart';
 
-
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -41,12 +40,13 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       await Future.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
-      Navigator.pushReplacementNamed(context, '/home');
+      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error: ${e.toString().replaceAll("Exception:", "").trim()}'),
+          content: Text(
+              'Error: ${e.toString().replaceAll("Exception:", "").trim()}'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -71,16 +71,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 40),
-                    // Logo Orbit
-                    SizedBox(
-                      height: 80,
-                      child: Image.asset(
-                        'assets/images/logo.png',
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
                     const Text(
                       'ORBIT',
                       textAlign: TextAlign.center,
@@ -108,7 +98,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       decoration: InputDecoration(
                         labelText: 'Correo electrónico',
                         labelStyle: const TextStyle(color: Colors.white),
-                        prefixIcon: const Icon(Icons.email, color: Colors.white70),
+                        prefixIcon:
+                            const Icon(Icons.email, color: Colors.white70),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(30),
                           borderSide: const BorderSide(color: Colors.white38),
@@ -124,9 +115,12 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       style: const TextStyle(color: Colors.white),
                       validator: (value) {
-                        if (value == null || value.isEmpty) return 'Campo requerido';
-                        final emailRegex = RegExp(r'^[\w-.]+@[\w-]+\.[a-zA-Z]{2,}$');
-                        if (!emailRegex.hasMatch(value)) return 'Ingrese un correo válido';
+                        if (value == null || value.isEmpty)
+                          return 'Campo requerido';
+                        final emailRegex =
+                            RegExp(r'^[\w-.]+@[\w-]+\.[a-zA-Z]{2,}$');
+                        if (!emailRegex.hasMatch(value))
+                          return 'Ingrese un correo válido';
                         return null;
                       },
                     ),
@@ -138,7 +132,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       decoration: InputDecoration(
                         labelText: 'Contraseña',
                         labelStyle: const TextStyle(color: Colors.white),
-                        prefixIcon: const Icon(Icons.lock, color: Colors.white70),
+                        prefixIcon:
+                            const Icon(Icons.lock, color: Colors.white70),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(30),
                           borderSide: const BorderSide(color: Colors.white38),
@@ -152,19 +147,28 @@ class _LoginScreenState extends State<LoginScreen> {
                           borderSide: const BorderSide(color: Colors.redAccent),
                         ),
                         suffixIcon: IconButton(
-                          icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility, color: Colors.white),
-                          tooltip: _obscurePassword ? 'Mostrar contraseña' : 'Ocultar contraseña',
-                          onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                          icon: Icon(
+                              _obscurePassword
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                              color: Colors.white),
+                          tooltip: _obscurePassword
+                              ? 'Mostrar contraseña'
+                              : 'Ocultar contraseña',
+                          onPressed: () => setState(
+                              () => _obscurePassword = !_obscurePassword),
                         ),
                       ),
                       style: const TextStyle(color: Colors.white),
                       validator: (value) {
-                        if (value == null || value.isEmpty) return 'Campo requerido';
+                        if (value == null || value.isEmpty)
+                          return 'Campo requerido';
                         if (value.length < 8) return 'Mínimo 8 caracteres';
                         return null;
                       },
                     ),
                     const SizedBox(height: 12),
+
                     /// RECUPERAR CONTRASEÑA
                     Align(
                       alignment: Alignment.centerRight,
@@ -185,6 +189,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                     const SizedBox(height: 30),
+
                     /// BOTÓN INICIAR SESIÓN
                     SizedBox(
                       width: double.infinity,
@@ -198,8 +203,13 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                         child: _isLoading
-                            ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                            : const Text('Iniciar sesión', style: TextStyle(fontSize: 18)),
+                            ? const SizedBox(
+                                height: 22,
+                                width: 22,
+                                child: CircularProgressIndicator(
+                                    color: Colors.white, strokeWidth: 2))
+                            : const Text('Iniciar sesión',
+                                style: TextStyle(fontSize: 18)),
                       ),
                     ),
                     const SizedBox(height: 18),
@@ -210,7 +220,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       },
                       child: const Text(
                         '¿No tienes cuenta? Regístrate',
-                        style: TextStyle(color: Colors.white70, decoration: TextDecoration.underline),
+                        style: TextStyle(
+                            color: Colors.white70,
+                            decoration: TextDecoration.underline),
                       ),
                     ),
                   ],

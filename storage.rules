@@ -1,0 +1,84 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Limita el tamaño del archivo subido (bytes)
+    function maxSize(mb) {
+      return request.resource.size <= mb * 1024 * 1024;
+    }
+
+    // Tipos MIME aceptados para imágenes
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    // Tipos MIME aceptados para audio
+    function isAudio() {
+      return request.resource.contentType.matches('audio/.*');
+    }
+
+    // Tipos MIME aceptados para video
+    function isVideo() {
+      return request.resource.contentType.matches('video/.*');
+    }
+
+    // ------------------------------------------------------------------
+    // /users/{userId}/avatar/  — foto de perfil (solo propietario escribe)
+    // ------------------------------------------------------------------
+    match /users/{userId}/avatar/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) && isImage() && maxSize(5);
+      allow delete: if isOwner(userId);
+    }
+
+    // ------------------------------------------------------------------
+    // /chatRooms/{roomId}/  — adjuntos de mensajes de chat
+    // El roomId es determinista = UID_menor_UID_mayor (igual que Firestore)
+    // Solo usuarios cuyo UID forme parte del roomId pueden leer/escribir.
+    // ------------------------------------------------------------------
+    match /chatRooms/{roomId}/{allFiles=**} {
+      function isRoomParticipant() {
+        // roomId = "uid1_uid2" (sorted); comprobamos que el usuario sea uno de los dos.
+        return isSignedIn() &&
+               (roomId.split('_')[0] == request.auth.uid ||
+                roomId.split('_')[1] == request.auth.uid);
+      }
+
+      allow read: if isRoomParticipant();
+      allow write: if isRoomParticipant()
+                   && (isImage() || isAudio() || isVideo())
+                   && maxSize(25);  // 25 MB por archivo
+      allow delete: if isRoomParticipant();
+    }
+
+    // ------------------------------------------------------------------
+    // /ia/{userId}/  — archivos adjuntos para el asistente IA
+    // Solo el propietario puede acceder.
+    // ------------------------------------------------------------------
+    match /ia/{userId}/{allFiles=**} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId)
+                   && (isImage() || isAudio())
+                   && maxSize(10);  // 10 MB por archivo
+      allow delete: if isOwner(userId);
+    }
+
+    // ------------------------------------------------------------------
+    // Deny everything else by default
+    // ------------------------------------------------------------------
+    match /{everything=**} {
+      allow read, write: if false;
+    }
+  }
+}

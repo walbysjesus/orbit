@@ -45,5 +45,13 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Orbit usa la camara para videollamadas y publicar estados.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Orbit usa el microfono para llamadas de voz, videollamadas y notas de audio.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Orbit necesita acceso a la galeria para enviar imagenes o videos en chat y estados.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Orbit puede guardar archivos multimedia de conversaciones y estados en tu galeria.</string>
 </dict>
 </plist>

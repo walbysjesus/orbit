@@ -14,7 +14,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   // Controllers
   final TextEditingController fullNameController = TextEditingController();
-  final TextEditingController documentNumberController = TextEditingController();
+  final TextEditingController documentNumberController =
+      TextEditingController();
   final TextEditingController emailController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
 
@@ -56,22 +57,58 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final Map<String, List<String>> citiesByCountry = {
     'Argentina': ['Buenos Aires', 'Córdoba', 'Rosario', 'Mendoza', 'La Plata'],
     'Australia': ['Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide'],
-    'Brasil': ['São Paulo', 'Rio de Janeiro', 'Brasília', 'Salvador', 'Fortaleza'],
+    'Brasil': [
+      'São Paulo',
+      'Rio de Janeiro',
+      'Brasília',
+      'Salvador',
+      'Fortaleza'
+    ],
     'Canadá': ['Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa'],
-    'Chile': ['Santiago', 'Valparaíso', 'Concepción', 'Antofagasta', 'La Serena'],
+    'Chile': [
+      'Santiago',
+      'Valparaíso',
+      'Concepción',
+      'Antofagasta',
+      'La Serena'
+    ],
     'China': ['Beijing', 'Shanghai', 'Shenzhen', 'Guangzhou', 'Chengdu'],
     'Colombia': ['Bogotá', 'Medellín', 'Cali', 'Barranquilla', 'Cartagena'],
     'España': ['Madrid', 'Barcelona', 'Valencia', 'Sevilla', 'Zaragoza'],
-    'Estados Unidos': ['New York', 'Los Angeles', 'Chicago', 'Miami', 'Houston'],
+    'Estados Unidos': [
+      'New York',
+      'Los Angeles',
+      'Chicago',
+      'Miami',
+      'Houston'
+    ],
     'Francia': ['Paris', 'Marseille', 'Lyon', 'Toulouse', 'Nice'],
     'Alemania': ['Berlin', 'Munich', 'Hamburg', 'Frankfurt', 'Cologne'],
     'India': ['New Delhi', 'Mumbai', 'Bangalore', 'Chennai', 'Hyderabad'],
     'Italia': ['Rome', 'Milan', 'Naples', 'Turin', 'Florence'],
     'Japón': ['Tokyo', 'Osaka', 'Kyoto', 'Yokohama', 'Sapporo'],
-    'México': ['Ciudad de México', 'Monterrey', 'Guadalajara', 'Puebla', 'Cancún'],
+    'México': [
+      'Ciudad de México',
+      'Monterrey',
+      'Guadalajara',
+      'Puebla',
+      'Cancún'
+    ],
     'Perú': ['Lima', 'Arequipa', 'Trujillo', 'Cusco', 'Piura'],
-    'Reino Unido': ['London', 'Manchester', 'Birmingham', 'Liverpool', 'Edinburgh'],
-    'Sudáfrica': ['Johannesburg', 'Cape Town', 'Durban', 'Pretoria', 'Port Elizabeth'],
+    'Reino Unido': [
+      'London',
+      'Manchester',
+      'Birmingham',
+      'Liverpool',
+      'Edinburgh'
+    ],
+    'Sudáfrica': [
+      'Johannesburg',
+      'Cape Town',
+      'Durban',
+      'Pretoria',
+      'Port Elizabeth'
+    ],
   };
 
   @override
@@ -100,18 +137,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
 
       if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Registro exitoso'),
-          backgroundColor: Colors.green,
-        ),
-      );
-
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      if (!mounted) return;
-      Navigator.pushReplacementNamed(context, '/home');
+      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -155,12 +181,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ),
                 ),
                 const SizedBox(height: 30),
-
                 _inputField(
                   label: 'Full Name',
                   controller: fullNameController,
                 ),
-
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: DropdownButtonFormField<String>(
@@ -174,19 +198,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               child: Text(type),
                             ))
                         .toList(),
-                    onChanged: (value) =>
-                        setState(() => documentType = value),
-                    validator: (value) =>
-                        value == null || value.isEmpty ? 'Required field' : null,
+                    onChanged: (value) => setState(() => documentType = value),
+                    validator: (value) => value == null || value.isEmpty
+                        ? 'Required field'
+                        : null,
                   ),
                 ),
-
                 _inputField(
                   label: 'Document Number',
                   controller: documentNumberController,
                   keyboardType: TextInputType.number,
                 ),
-
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: DropdownButtonFormField<String>(
@@ -206,11 +228,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         city = null;
                       });
                     },
-                    validator: (value) =>
-                        value == null || value.isEmpty ? 'Required field' : null,
+                    validator: (value) => value == null || value.isEmpty
+                        ? 'Required field'
+                        : null,
                   ),
                 ),
-
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: DropdownButtonFormField<String>(
@@ -227,17 +249,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             .toList()
                         : [],
                     onChanged: (value) => setState(() => city = value),
-                    validator: (value) =>
-                        value == null || value.isEmpty ? 'Required field' : null,
+                    validator: (value) => value == null || value.isEmpty
+                        ? 'Required field'
+                        : null,
                   ),
                 ),
-
                 _inputField(
                   label: 'Email',
                   controller: emailController,
                   keyboardType: TextInputType.emailAddress,
                 ),
-
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: TextFormField(
@@ -252,6 +273,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               : Icons.visibility,
                           color: Colors.white,
                         ),
+                        tooltip: _obscurePassword
+                            ? 'Mostrar contraseña'
+                            : 'Ocultar contraseña',
                         onPressed: () => setState(
                           () => _obscurePassword = !_obscurePassword,
                         ),
@@ -270,17 +294,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       if (!RegExp(r'[0-9]').hasMatch(value)) {
                         return 'Debe contener al menos un número';
                       }
-                      if (!RegExp(r'[!@#\$&*~%^?¿.,;:_\-]')
-                          .hasMatch(value)) {
+                      if (!RegExp(r'[!@#\$&*~%^?¿.,;:_\-]').hasMatch(value)) {
                         return 'Debe contener al menos un carácter especial';
                       }
                       return null;
                     },
                   ),
                 ),
-
                 const SizedBox(height: 30),
-
                 _isLoading
                     ? const Center(
                         child: CircularProgressIndicator(
@@ -291,30 +312,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         onPressed: _registerUser,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF3389FF),
+                          foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(30),
                           ),
                         ),
                         child: const Text(
-                          'SIGN UP',
-                          style: TextStyle(fontSize: 18, letterSpacing: 1.5),
+                          'Registrarme',
+                          style: TextStyle(
+                            fontSize: 18,
+                            letterSpacing: 1.2,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
-
                 const SizedBox(height: 20),
-
                 TextButton(
                   onPressed: () => Navigator.pop(context),
                   child: const Text(
-                    'Already have an account? Log In',
+                    '¿Ya tienes una cuenta? Inicia sesión',
                     style: TextStyle(
                       color: Colors.white70,
                       decoration: TextDecoration.underline,
                     ),
                   ),
                 ),
-
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: GestureDetector(

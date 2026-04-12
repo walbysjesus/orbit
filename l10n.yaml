@@ -1,0 +1,4 @@
+arb-dir: lib/l10n
+output-dir: .dart_tool/flutter_gen/gen_l10n
+output-localization-file: app_localizations.dart
+untranslated-messages-file: l10n/untranslated.json

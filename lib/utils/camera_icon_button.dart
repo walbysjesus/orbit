@@ -4,22 +4,49 @@ class CameraIconButton extends StatelessWidget {
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
-  const CameraIconButton({required this.icon, required this.tooltip, required this.onTap, Key? key}) : super(key: key);
+  final Color? iconColor;
+  final bool showFeedback;
+  const CameraIconButton(
+      {required this.icon,
+      required this.tooltip,
+      required this.onTap,
+      this.iconColor,
+      this.showFeedback = false,
+      Key? key})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(24),
-      onTap: () {
-        onTap();
-        // Feedback visual PRO
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(tooltip), duration: const Duration(milliseconds: 800)),
-        );
-      },
-      child: Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: Icon(icon, color: Colors.white, size: 28),
+    return Semantics(
+      button: true,
+      label: tooltip,
+      child: Tooltip(
+        message: tooltip,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          splashColor: Theme.of(context).colorScheme.primary.withAlpha(45),
+          onTap: () {
+            onTap();
+            if (showFeedback) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                    content: Text(tooltip),
+                    duration: const Duration(milliseconds: 800)),
+              );
+            }
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Icon(
+              icon,
+              color: iconColor ??
+                  Theme.of(context).iconTheme.color ??
+                  Colors.white,
+              size: 28,
+              semanticLabel: tooltip,
+            ),
+          ),
+        ),
       ),
     );
   }

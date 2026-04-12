@@ -12,6 +12,7 @@ class NoveltySearchDelegate extends SearchDelegate<String> {
     return [
       IconButton(
         icon: const Icon(Icons.clear),
+        tooltip: 'Limpiar búsqueda',
         onPressed: () => query = '',
       ),
     ];
@@ -21,6 +22,7 @@ class NoveltySearchDelegate extends SearchDelegate<String> {
   Widget? buildLeading(BuildContext context) {
     return IconButton(
       icon: const Icon(Icons.arrow_back),
+      tooltip: 'Volver',
       onPressed: () => close(context, ''),
     );
   }

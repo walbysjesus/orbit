@@ -1,9 +1,202 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    function isSignedIn() {
+      return request.auth != null;
     }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isParticipant(data) {
+      return isSignedIn() && request.auth.uid in data.participants;
+    }
+
+    function hasOnlyKeys(allowed) {
+      return request.resource.data.keys().hasOnly(allowed);
+    }
+
+    function validParticipants(data) {
+      return data.participants is list
+        && data.participants.size() >= 2
+        && data.participants.size() <= 20;
+    }
+
+    function validOptionalString(field, maxLength) {
+      return !(field in request.resource.data)
+        || (request.resource.data[field] is string
+          && request.resource.data[field].size() <= maxLength);
+    }
+
+    function validUserKeys(data) {
+      return data.keys().hasOnly([
+        'email',
+        'fullName',
+        'documentType',
+        'documentNumber',
+        'orbitNumber',
+        'orbitNumberAssignedAt',
+        'country',
+        'city',
+        'createdAt',
+        'fcmToken'
+      ]);
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && validUserKeys(request.resource.data)
+        && request.resource.data.email is string
+        && validOptionalString('fullName', 120)
+        && validOptionalString('documentType', 40)
+        && validOptionalString('documentNumber', 60)
+        && validOptionalString('orbitNumber', 16)
+        && validOptionalString('country', 80)
+        && validOptionalString('city', 80)
+        && validOptionalString('fcmToken', 512);
+
+      allow update: if isOwner(userId)
+        && validUserKeys(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (
+          request.resource.data.orbitNumber == resource.data.orbitNumber
+          || !('orbitNumber' in resource.data)
+        )
+        && (
+          request.resource.data.orbitNumberAssignedAt == resource.data.orbitNumberAssignedAt
+          || !('orbitNumberAssignedAt' in resource.data)
+        )
+        && request.resource.data.email == resource.data.email
+        && validOptionalString('fullName', 120)
+        && validOptionalString('documentType', 40)
+        && validOptionalString('documentNumber', 60)
+        && validOptionalString('country', 80)
+        && validOptionalString('city', 80)
+        && validOptionalString('fcmToken', 512);
+
+      allow delete: if false;
+    }
+
+    match /orbitNumbers/{numberId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && !exists(/databases/$(database)/documents/orbitNumbers/$(numberId))
+        && request.resource.data.keys().hasOnly(['uid', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid;
+
+      allow update, delete: if false;
+    }
+
+    match /chatRooms/{roomId} {
+      allow create: if isSignedIn()
+        && hasOnlyKeys(['participants', 'title', 'createdBy', 'createdAt', 'updatedAt'])
+        && validParticipants(request.resource.data)
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.createdBy == request.auth.uid
+        && validOptionalString('title', 80);
+
+      allow read: if isParticipant(resource.data);
+
+      allow update: if isParticipant(resource.data)
+        && request.resource.data.participants == resource.data.participants
+        && request.resource.data.createdBy == resource.data.createdBy
+        && validOptionalString('title', 80);
+
+      allow delete: if false;
+    }
+
+    match /chatRooms/{roomId}/messages/{messageId} {
+      allow read: if isSignedIn()
+        && isParticipant(get(/databases/$(database)/documents/chatRooms/$(roomId)).data);
+
+      allow create: if isSignedIn()
+        && isParticipant(get(/databases/$(database)/documents/chatRooms/$(roomId)).data)
+        && hasOnlyKeys(['senderId', 'text', 'type', 'fileUrl', 'audioUrl', 'timestamp', 'metadata'])
+        && request.resource.data.senderId == request.auth.uid
+        && (
+          (request.resource.data.type == 'text'
+            && request.resource.data.text is string
+            && request.resource.data.text.matches('^e2er1:.*'))
+          || (request.resource.data.type != 'text')
+        )
+        && validOptionalString('text', 4000)
+        && validOptionalString('fileUrl', 512)
+        && validOptionalString('audioUrl', 512);
+
+      allow update, delete: if false;
+    }
+
+    match /callSessions/{callId} {
+      allow create: if isSignedIn()
+        && hasOnlyKeys(['callerId', 'callerName', 'calleeId', 'status', 'startedAt', 'endedAt', 'updatedAt'])
+        && request.resource.data.callerId == request.auth.uid
+        && validOptionalString('callerName', 120)
+        && request.resource.data.calleeId is string
+        && request.resource.data.calleeId != request.auth.uid;
+
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.callerId
+        || request.auth.uid == resource.data.calleeId
+      );
+
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.callerId
+        || request.auth.uid == resource.data.calleeId
+      )
+      && request.resource.data.callerId == resource.data.callerId
+      && request.resource.data.callerName == resource.data.callerName
+      && request.resource.data.calleeId == resource.data.calleeId;
+
+      allow delete: if false;
+    }
+
+    match /iaConversations/{conversationId} {
+      allow create: if isSignedIn()
+        && hasOnlyKeys(['userId', 'title', 'createdAt', 'updatedAt', 'lastIntent'])
+        && request.resource.data.userId == request.auth.uid
+        && validOptionalString('title', 120)
+        && validOptionalString('lastIntent', 64);
+
+      allow read, update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && validOptionalString('title', 120)
+        && validOptionalString('lastIntent', 64);
+
+      allow delete: if false;
+    }
+
+    match /iaConversations/{conversationId}/messages/{messageId} {
+      allow read: if isSignedIn()
+        && get(/databases/$(database)/documents/iaConversations/$(conversationId)).data.userId == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && get(/databases/$(database)/documents/iaConversations/$(conversationId)).data.userId == request.auth.uid
+        && hasOnlyKeys(['senderId', 'text', 'timestamp', 'metadata'])
+        && request.resource.data.senderId == request.auth.uid
+        && validOptionalString('text', 4000);
+
+      allow update, delete: if false;
+    }
+
+    // ─── Señalización WebRTC via Firestore ───────────────────────────────
+    // Datos efímeros (SDP + ICE). Solo usuarios autenticados.
+    match /callSignaling/{roomId} {
+      allow read, write: if isSignedIn();
+
+      match /callerCandidates/{docId} {
+        allow read, write: if isSignedIn();
+      }
+
+      match /calleeCandidates/{docId} {
+        allow read, write: if isSignedIn();
+      }
+    }
+
     // Deny all other access by default
     match /{document=**} {
       allow read, write: if false;

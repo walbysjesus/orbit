@@ -1,21 +1,46 @@
-import 'package:google_weather_flutter/google_weather_flutter.dart';
+import 'package:weather/weather.dart';
+import '../config/config.dart';
 import '../ia_core/decision_engine.dart';
 
 class WeatherService {
-  // Devuelve el estado del clima como WeatherCondition
-  static Future<WeatherCondition> getCurrentWeather({required double lat, required double lon}) async {
+  static Future<WeatherCondition> getCurrentWeather({
+    required double lat,
+    required double lon,
+  }) async {
     try {
-      final weather = await GoogleWeather().getWeather(lat: lat, lon: lon);
-      final code = weather.currentWeather?.weatherCode ?? 0;
-      // Mapear el código de GoogleWeather a WeatherCondition
-      if (code >= 200 && code < 300) return WeatherCondition.storm;
-      if (code >= 300 && code < 600) return WeatherCondition.rain;
-      if (code >= 600 && code < 700) return WeatherCondition.fog;
-      if (code >= 700 && code < 800) return WeatherCondition.fog;
-      if (code == 800) return WeatherCondition.clear;
-      if (code > 800) return WeatherCondition.rain;
+      final weatherFactory =
+          WeatherFactory(openWeatherMapApiKey, language: Language.SPANISH);
+      final Weather weather =
+          await weatherFactory.currentWeatherByLocation(lat, lon);
+      final description = (weather.weatherDescription ?? '').toLowerCase();
+
+      if (description.contains('tormenta') ||
+          description.contains('storm') ||
+          description.contains('thunder')) {
+        return WeatherCondition.storm;
+      }
+      if (description.contains('lluvia') ||
+          description.contains('rain') ||
+          description.contains('drizzle')) {
+        return WeatherCondition.rain;
+      }
+      if (description.contains('niebla') ||
+          description.contains('fog') ||
+          description.contains('mist') ||
+          description.contains('haze')) {
+        return WeatherCondition.fog;
+      }
+      if (description.contains('despejado') ||
+          description.contains('clear') ||
+          description.contains('sun')) {
+        return WeatherCondition.clear;
+      }
+      if (description.contains('calor extremo') ||
+          description.contains('extreme heat')) {
+        return WeatherCondition.extremeHeat;
+      }
       return WeatherCondition.unknown;
-    } catch (_) {
+    } catch (e) {
       return WeatherCondition.unknown;
     }
   }
