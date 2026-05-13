@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
-import 'dart:async';
+import 'dart:async' show StreamSubscription, Timer, unawaited;
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -10,13 +11,16 @@ import 'status_screen.dart';
 
 // Communication
 import '../communication/call_screen.dart';
-import '../communication/chat_screen.dart';
+import '../communication/chat_screen.dart' as chat;
+import '../communication/chat_hub_screen.dart';
 import '../communication/video_call_screen.dart';
 
 // Services
 import '../../services/auth_service.dart';
 import '../../services/call_session_service.dart';
 import '../../services/network_service.dart';
+import '../../services/resilient_stream_helper.dart';
+import '../../utils/error_presenter.dart';
 
 // Orbit IA
 import '../ia/orbit_ia_screen.dart';
@@ -37,11 +41,21 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isSatellite = false;
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _incomingCallSub;
+  ResilientStreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+      _incomingCallResilient;
   String? _activeIncomingCallId;
   String? _incomingCallerId;
   String? _incomingCallerName;
+  bool _incomingAudioOnly = true;
+  String _incomingListenerStatusLabel = '';
+  RealtimeUxState _homeRealtimeState = RealtimeUxState.reconnecting;
+  String _homeRealtimeMessage = 'Conectando servicios en tiempo real...';
 
   Timer? _networkTimer;
+  final AudioPlayer _incomingRingPlayer = AudioPlayer();
+  bool _incomingRingtonePlaying = false;
+
+  DateTime? _lastBackPress;
 
   @override
   void initState() {
@@ -69,16 +83,32 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _networkTimer?.cancel();
+    unawaited(_incomingCallResilient?.cancel());
     _incomingCallSub?.cancel();
+    unawaited(_stopIncomingRingtone());
+    unawaited(_incomingRingPlayer.dispose());
     super.dispose();
   }
 
   Future<void> _loadUserDisplay() async {
     final user = AuthService.getCurrentUser();
     if (!mounted) return;
-    setState(() {
-      _displayName = user?.displayName ?? user?.uid ?? 'Usuario ORBIT';
-    });
+
+    // Prioridad: displayName de Auth → fullName de Firestore → uid → default
+    String name = user?.displayName?.trim() ?? '';
+    if (name.isEmpty && user != null) {
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        name = (doc.data()?['fullName'] as String?)?.trim() ?? '';
+      } catch (_) {}
+    }
+    if (name.isEmpty) name = user?.email?.split('@').first ?? 'Usuario ORBIT';
+
+    if (!mounted) return;
+    setState(() => _displayName = name);
   }
 
   Future<void> _refreshNetworkInsight() async {
@@ -97,20 +127,25 @@ class _HomeScreenState extends State<HomeScreen> {
       _recommendedMode = insight.recommendedMode;
       _latencyMs = latency;
       _isSatellite = isSatellite;
+      _homeRealtimeState =
+          quality == 'none' ? RealtimeUxState.offline : RealtimeUxState.online;
+      _homeRealtimeMessage = quality == 'none'
+          ? 'Sin internet. Funciones limitadas hasta reconectar.'
+          : 'En línea. Realtime activo.';
     });
   }
 
   _NetworkInsight _buildNetworkInsight(String quality, int? latencyMs) {
     if (quality == 'none') {
       return const _NetworkInsight(
-        label: 'Sin conexiÃ³n',
+        label: 'Sin conexión',
         color: Color(0xFFE15759),
         recommendedMode: 'chat',
       );
     }
     if (quality == 'low') {
       return const _NetworkInsight(
-        label: 'SeÃ±al inestable',
+        label: 'Señal inestable',
         color: Color(0xFFF28E2B),
         recommendedMode: 'chat',
       );
@@ -118,26 +153,26 @@ class _HomeScreenState extends State<HomeScreen> {
     if (quality == 'medium') {
       if (latencyMs != null && latencyMs > 240) {
         return const _NetworkInsight(
-          label: 'SeÃ±al media, latencia alta',
+          label: 'Señal media, latencia alta',
           color: Color(0xFFF1C453),
           recommendedMode: 'chat',
         );
       }
       return const _NetworkInsight(
-        label: 'SeÃ±al media',
+        label: 'Señal media',
         color: Color(0xFFE0C15A),
         recommendedMode: 'voz o chat',
       );
     }
     if (latencyMs != null && latencyMs > 200) {
       return const _NetworkInsight(
-        label: 'SeÃ±al alta, latencia variable',
+        label: 'Señal alta, latencia variable',
         color: Color(0xFF63D5A8),
         recommendedMode: 'llamada de voz',
       );
     }
     return const _NetworkInsight(
-      label: 'SeÃ±al Ã³ptima',
+      label: 'Señal óptima',
       color: Color(0xFF4ECCA3),
       recommendedMode: 'todos los servicios',
     );
@@ -147,43 +182,165 @@ class _HomeScreenState extends State<HomeScreen> {
     final uid = AuthService.getCurrentUser()?.uid;
     if (uid == null) return;
 
-    _incomingCallSub =
-        CallSessionService.incomingRingingStream().listen((snap) {
-      if (snap.docs.isEmpty) {
-        if (!mounted) return;
-        setState(() {
-          _activeIncomingCallId = null;
-          _incomingCallerId = null;
-          _incomingCallerName = null;
-        });
-        return;
-      }
+    unawaited(_incomingCallResilient?.cancel());
+    _incomingCallSub?.cancel();
 
-      final callDoc = snap.docs.first;
-      final session = callDoc.data();
-      final status = session['status'] as String?;
+    _incomingCallResilient =
+        ResilientStreamSubscription<QuerySnapshot<Map<String, dynamic>>>(
+      streamFactory: () => CallSessionService.incomingRingingStream(),
+      timeout: const Duration(seconds: 15),
+      logTag: 'HomeIncomingCallStream:$uid',
+      onStatus: (status) {
+        _applyIncomingCallListenerStatus(status);
+      },
+      onError: (error, _) {
+        debugPrint('[HomeIncomingCallStream:$uid] error=$error');
+      },
+      onData: (snap) {
+        if (snap.docs.isEmpty) {
+          unawaited(_stopIncomingRingtone());
+          if (!mounted) return;
+          setState(() {
+            _activeIncomingCallId = null;
+            _incomingCallerId = null;
+            _incomingCallerName = null;
+            _incomingAudioOnly = true;
+          });
+          return;
+        }
 
-      if (status == 'ringing' && _activeIncomingCallId != callDoc.id) {
-        if (!mounted) return;
-        setState(() {
-          _activeIncomingCallId = callDoc.id;
-          _incomingCallerId = session['callerId'] as String?;
-        });
-        _fetchCallerName(_incomingCallerId);
-      } else if (status == 'accepted' ||
-          status == 'ended' ||
-          status == 'rejected') {
-        if (!mounted) return;
-        setState(() => _activeIncomingCallId = null);
-      }
-    });
+        final callDoc = snap.docs.first;
+        final session = callDoc.data();
+        final status = session['status'] as String?;
+        final expiresAt = session['ringingExpiresAt'] as Timestamp?;
+        final nowTs = Timestamp.now();
+
+        if (expiresAt != null && expiresAt.compareTo(nowTs) <= 0) {
+          unawaited(
+            callDoc.reference.update({
+              'status': 'missed',
+              'endedAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            }).catchError((_) {}),
+          );
+          unawaited(_stopIncomingRingtone());
+          if (!mounted) return;
+          setState(() {
+            _activeIncomingCallId = null;
+            _incomingCallerId = null;
+            _incomingCallerName = null;
+            _incomingAudioOnly = true;
+          });
+          return;
+        }
+
+        if (status == 'ringing' && _activeIncomingCallId != callDoc.id) {
+          final callType =
+              (session['callType'] as String?)?.trim().toLowerCase();
+          if (!mounted) return;
+          setState(() {
+            _activeIncomingCallId = callDoc.id;
+            _incomingCallerId = session['callerId'] as String?;
+            _incomingAudioOnly = callType != 'video';
+          });
+          unawaited(_startIncomingRingtone());
+          _fetchCallerName(_incomingCallerId);
+        } else if (status == 'accepted' ||
+            status == 'ended' ||
+            status == 'missed' ||
+            status == 'rejected') {
+          unawaited(_stopIncomingRingtone());
+          if (!mounted) return;
+          setState(() {
+            _activeIncomingCallId = null;
+            _incomingCallerId = null;
+            _incomingCallerName = null;
+            _incomingAudioOnly = true;
+          });
+        }
+      },
+    );
+    _incomingCallResilient!.start();
+  }
+
+  void _applyIncomingCallListenerStatus(ResilientStreamStatus status) {
+    if (!mounted) return;
+    final prevState = _homeRealtimeState;
+    final prevMessage = _homeRealtimeMessage;
+    String label;
+    switch (status) {
+      case ResilientStreamStatus.connected:
+        label = '';
+        _homeRealtimeState = RealtimeUxState.online;
+        _homeRealtimeMessage = 'Sincronización en tiempo real activa.';
+        break;
+      case ResilientStreamStatus.connecting:
+      case ResilientStreamStatus.reconnecting:
+        label = 'Reconectando...';
+        _homeRealtimeState = RealtimeUxState.reconnecting;
+        _homeRealtimeMessage = 'Reconectando eventos en tiempo real...';
+        break;
+      case ResilientStreamStatus.timeout:
+      case ResilientStreamStatus.offline:
+        label = 'Sin conexión';
+        _homeRealtimeState = status == ResilientStreamStatus.timeout
+            ? RealtimeUxState.timeout
+            : RealtimeUxState.offline;
+        _homeRealtimeMessage = status == ResilientStreamStatus.timeout
+            ? 'Timeout de red. Reintentando suscripción...'
+            : 'Sin conexión para eventos en tiempo real.';
+        break;
+    }
+    if (_incomingListenerStatusLabel != label ||
+        prevState != _homeRealtimeState ||
+        prevMessage != _homeRealtimeMessage) {
+      setState(() {
+        _incomingListenerStatusLabel = label;
+      });
+    }
+  }
+
+  Future<void> _startIncomingRingtone() async {
+    if (_incomingRingtonePlaying) return;
+    _incomingRingtonePlaying = true;
+    try {
+      await _incomingRingPlayer.setAudioContext(
+        AudioContext(
+          android: AudioContextAndroid(
+            audioMode: AndroidAudioMode.normal,
+            contentType: AndroidContentType.sonification,
+            usageType: AndroidUsageType.alarm,
+            audioFocus: AndroidAudioFocus.gainTransient,
+          ),
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: {AVAudioSessionOptions.mixWithOthers},
+          ),
+        ),
+      );
+      await _incomingRingPlayer.setReleaseMode(ReleaseMode.loop);
+      await _incomingRingPlayer.setVolume(1.0);
+      await _incomingRingPlayer.play(AssetSource('audio/outgoing_ring.wav'));
+    } catch (e) {
+      _incomingRingtonePlaying = false;
+      debugPrint('Incoming ringtone error: $e');
+      SystemSound.play(SystemSoundType.alert);
+    }
+  }
+
+  Future<void> _stopIncomingRingtone() async {
+    if (!_incomingRingtonePlaying) return;
+    _incomingRingtonePlaying = false;
+    try {
+      await _incomingRingPlayer.stop();
+    } catch (_) {}
   }
 
   Future<void> _fetchCallerName(String? callerId) async {
     if (callerId == null) return;
     try {
       final snap = await FirebaseFirestore.instance
-          .collection('users')
+          .collection('users_public')
           .doc(callerId)
           .get();
       final name = snap.data()?['fullName'] as String?;
@@ -197,20 +354,27 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _acceptIncomingCall() async {
     if (_activeIncomingCallId == null || _incomingCallerId == null) return;
     try {
+      await _stopIncomingRingtone();
       await CallSessionService.acceptSession(_activeIncomingCallId!);
       if (!mounted) return;
       _open(
         context,
         VideoCallScreen(
           remoteUserId: _incomingCallerId,
+          initialRemoteDisplayName: _incomingCallerName,
           callSessionId: _activeIncomingCallId,
           isCaller: false, // callee siempre es quien acepta
+          audioOnly: _incomingAudioOnly,
         ),
       );
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Error al aceptar llamada')),
+        ErrorPresenter.showSnack(
+          context,
+          'No se pudo aceptar la llamada.',
+          state: RealtimeUxState.error,
+          actionLabel: 'Reintentar',
+          onAction: _acceptIncomingCall,
         );
       }
     }
@@ -219,99 +383,20 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _rejectIncomingCall() async {
     if (_activeIncomingCallId == null) return;
     try {
+      await _stopIncomingRingtone();
       await CallSessionService.rejectSession(_activeIncomingCallId!);
       if (!mounted) return;
-      setState(() => _activeIncomingCallId = null);
+      setState(() {
+        _activeIncomingCallId = null;
+        _incomingCallerId = null;
+        _incomingCallerName = null;
+        _incomingAudioOnly = true;
+      });
     } catch (_) {}
   }
 
   void _open(BuildContext context, Widget screen) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => screen),
-    );
-  }
-
-  Future<String?> _promptRemoteIdentifier({
-    required String title,
-    required String actionLabel,
-  }) async {
-    final controller = TextEditingController();
-    final selected = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Numero Orbit o UID',
-            hintText: 'Ejemplo: 12345678 o UID exacto',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancelar'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: Text(actionLabel),
-          ),
-        ],
-      ),
-    );
-    return selected;
-  }
-
-  Future<void> _openDirectChat() async {
-    final remoteUid = await AuthService.resolveUserIdFromContactIdentifier(
-      (await _promptRemoteIdentifier(
-            title: 'Iniciar Chat',
-            actionLabel: 'Chatear',
-          )) ??
-          '',
-    );
-
-    if (!mounted) return;
-
-    if (remoteUid == null || remoteUid.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('ID no vÃ¡lido')));
-      }
-      return;
-    }
-
-    _open(context, ChatScreen(contactNameOrId: remoteUid));
-  }
-
-  Future<void> _openDirectVideoCall() async {
-    final remoteUid = await AuthService.resolveUserIdFromContactIdentifier(
-      (await _promptRemoteIdentifier(
-            title: 'Iniciar Videollamada',
-            actionLabel: 'Videollamar',
-          )) ??
-          '',
-    );
-
-    if (!mounted) return;
-
-    if (remoteUid == null || remoteUid.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('ID no vÃ¡lido')));
-      }
-      return;
-    }
-
-    _open(
-      context,
-      VideoCallScreen(
-        remoteUserId: remoteUid,
-        isCaller: true,
-      ),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
 
   void _openBottomSection(int index) {
@@ -319,13 +404,10 @@ class _HomeScreenState extends State<HomeScreen> {
       case 0:
         return;
       case 1:
-        unawaited(_openDirectChat());
+        _open(context, const ChatHubScreen());
         return;
       case 2:
         _open(context, const CallScreen());
-        return;
-      case 3:
-        unawaited(_openDirectVideoCall());
         return;
     }
   }
@@ -340,7 +422,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Icon(Icons.info_rounded, color: Color(0xFF0A4D8F)),
             SizedBox(width: 8),
             Text(
-              'NÃºmero Orbit',
+              'Code Orbit',
               style: TextStyle(
                 color: Color(0xFF0A4D8F),
                 fontWeight: FontWeight.bold,
@@ -354,7 +436,7 @@ class _HomeScreenState extends State<HomeScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Tu NÃºmero Orbit es:',
+                'Tu Code Orbit es:',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: Color(0xFF123A5B),
@@ -363,8 +445,10 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 10),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFE9F4FF),
                   borderRadius: BorderRadius.circular(8),
@@ -374,7 +458,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'âœ¨ Tu identificador amigable',
+                      '✨ Tu identificador amigable',
                       style: TextStyle(
                         color: Color(0xFF0A4D8F),
                         fontWeight: FontWeight.bold,
@@ -383,11 +467,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     SizedBox(height: 6),
                     Text(
-                      'Es una versiÃ³n corta y fÃ¡cil de recordar de tu ID de usuario, perfecto para compartir con amigos.',
-                      style: TextStyle(
-                        color: Color(0xFF5A7388),
-                        fontSize: 11,
-                      ),
+                      'Es una versión corta y fácil de recordar de tu ID de usuario, perfecto para compartir con amigos.',
+                      style: TextStyle(color: Color(0xFF5A7388), fontSize: 11),
                     ),
                   ],
                 ),
@@ -406,21 +487,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.call,
                 title: 'Compartir en redes',
                 description:
-                    'MÃ¡s fÃ¡cil de compartir que tu ID completo. Ejemplo: "LlÃ¡mame en Orbit: 12345678"',
+                    'Más fácil de compartir que tu ID completo. Ejemplo: "Llámame en Orbit: 12345678"',
               ),
               const SizedBox(height: 8),
               const _InfoBullet(
                 icon: Icons.contacts,
                 title: 'Guardar en contactos',
                 description:
-                    'Los amigos pueden guardarlo fÃ¡cilmente en sus contactos de Orbit.',
+                    'Los amigos pueden guardarlo fácilmente en sus contactos de Orbit.',
               ),
               const SizedBox(height: 8),
               const _InfoBullet(
                 icon: Icons.person_add,
                 title: 'Agregar al directorio',
                 description:
-                    'Otros usuarios pueden encontrarte usando tu NÃºmero Orbit en la bÃºsqueda.',
+                    'Otros usuarios pueden encontrarte usando tu Code Orbit en la búsqueda.',
               ),
               const SizedBox(height: 12),
               Container(
@@ -431,7 +512,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   border: Border.all(color: const Color(0xFFFFCC80)),
                 ),
                 child: const Text(
-                  'ðŸ’¡ Tip: Puedes compartir tu NÃºmero Orbit en redes sociales. Los datos viajan por tu ID Ãºnico de verdad.',
+                  '💡 Tip: Puedes compartir tu Code Orbit en redes sociales. Los datos viajan por tu ID único de verdad.',
                   style: TextStyle(
                     color: Color(0xFF5A3F00),
                     fontSize: 11,
@@ -486,14 +567,28 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: const Icon(Icons.menu_rounded, color: Colors.white),
                   ),
                   const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Menu rapido',
-                      style: TextStyle(
-                        color: Color(0xFF153B5A),
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF153B5A),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const Text(
+                          'Menú rápido',
+                          style: TextStyle(
+                            color: Color(0xFF4B78A1),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -501,8 +596,10 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             if (uid.isNotEmpty) _buildOrbitNumberTile(uid),
             ListTile(
-              leading:
-                  const Icon(Icons.history_rounded, color: Color(0xFF8FD5FF)),
+              leading: const Icon(
+                Icons.history_rounded,
+                color: Color(0xFF8FD5FF),
+              ),
               title: const Text(
                 'Historial',
                 style: TextStyle(color: Color(0xFF153B5A)),
@@ -513,8 +610,10 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             ),
             ListTile(
-              leading:
-                  const Icon(Icons.settings_rounded, color: Color(0xFF93E2C5)),
+              leading: const Icon(
+                Icons.settings_rounded,
+                color: Color(0xFF93E2C5),
+              ),
               title: const Text(
                 'Configuracion',
                 style: TextStyle(color: Color(0xFF153B5A)),
@@ -561,12 +660,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _orbitNumberTile(BuildContext context, String orbitNumber) {
     final canCopy = orbitNumber.trim().isNotEmpty && orbitNumber != '-';
     return ListTile(
-      leading: const Icon(
-        Icons.confirmation_number,
-        color: Color(0xFFFFC46C),
-      ),
+      leading: const Icon(Icons.confirmation_number, color: Color(0xFFFFC46C)),
       title: const Text(
-        'NÃºmero Orbit',
+        'Code Orbit',
         style: TextStyle(color: Color(0xFF5A7388), fontSize: 12),
       ),
       subtitle: Text(
@@ -582,19 +678,24 @@ class _HomeScreenState extends State<HomeScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            tooltip: 'Â¿CÃ³mo usar el NÃºmero Orbit?',
-            icon: const Icon(Icons.info_outline,
-                color: Color(0xFF0A4D8F), size: 20),
+            tooltip: '¿Cómo usar el Code Orbit?',
+            icon: const Icon(
+              Icons.info_outline,
+              color: Color(0xFF0A4D8F),
+              size: 20,
+            ),
             onPressed: () => _showNumberOrbitInfoDialog(context),
           ),
           IconButton(
-            tooltip: 'Copiar nÃºmero',
+            tooltip: 'Copiar número',
             icon: const Icon(Icons.copy, color: Color(0xFF5A7388), size: 20),
             onPressed: canCopy
                 ? () {
                     Clipboard.setData(ClipboardData(text: orbitNumber));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('NÃºmero Orbit copiado')),
+                    ErrorPresenter.showSnack(
+                      context,
+                      'Code Orbit copiado',
+                      state: RealtimeUxState.delivered,
                     );
                   }
                 : null,
@@ -609,110 +710,137 @@ class _HomeScreenState extends State<HomeScreen> {
     final currentUser = AuthService.getCurrentUser();
     final uid = currentUser?.uid ?? '';
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF3F8FD),
-      appBar: AppBar(
-        title: const Text('Orbit'),
-        backgroundColor: const Color(0xFFFFFFFF),
-        foregroundColor: const Color(0xFF0A4D8F),
-        iconTheme: const IconThemeData(color: Color(0xFF0A4D8F)),
-        titleTextStyle: const TextStyle(
-          color: Color(0xFF0A4D8F),
-          fontSize: 22,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 0.3,
-        ),
-        elevation: 2,
-        centerTitle: true,
-        leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: const Icon(Icons.menu_rounded),
-            tooltip: 'Menu',
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        final now = DateTime.now();
+        final isSecondPress = _lastBackPress != null &&
+            now.difference(_lastBackPress!) < const Duration(seconds: 2);
+        if (isSecondPress) {
+          SystemNavigator.pop();
+          return;
+        }
+        _lastBackPress = now;
+        ErrorPresenter.showSnack(
+          context,
+          'Presiona atrás de nuevo para salir',
+          state: RealtimeUxState.queued,
+          duration: const Duration(seconds: 2),
+        );
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF3F8FD),
+        appBar: AppBar(
+          title: const Text('Orbit'),
+          backgroundColor: const Color(0xFFFFFFFF),
+          foregroundColor: const Color(0xFF0A4D8F),
+          iconTheme: const IconThemeData(color: Color(0xFF0A4D8F)),
+          titleTextStyle: const TextStyle(
+            color: Color(0xFF0A4D8F),
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.3,
           ),
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Nuevo estado',
-            onPressed: () => _open(context, const StatusScreen()),
-            icon: Stack(
-              clipBehavior: Clip.none,
-              children: const [
-                Icon(Icons.camera_alt_rounded, color: Color(0xFF0A4D8F)),
-                Positioned(
-                  right: -2,
-                  bottom: -2,
-                  child: Icon(
-                    Icons.add_circle,
-                    size: 14,
-                    color: Color(0xFF0A4D8F),
-                  ),
-                ),
-              ],
+          elevation: 2,
+          centerTitle: true,
+          leading: Builder(
+            builder: (ctx) => IconButton(
+              icon: const Icon(Icons.menu_rounded),
+              tooltip: 'Menu',
+              onPressed: () => Scaffold.of(ctx).openDrawer(),
             ),
           ),
-          const SizedBox(width: 6),
-        ],
-      ),
-      drawer: _buildHomeDrawer(uid, _displayName),
-      body: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            children: [
-              _HeroSection(
-                networkLabel: _networkLabel,
-                networkColor: _networkColor,
-                latencyMs: _latencyMs,
-                isSatellite: _isSatellite,
+          actions: [
+            IconButton(
+              tooltip: 'Nuevo estado',
+              onPressed: () => _open(context, const StatusScreen()),
+              icon: Stack(
+                clipBehavior: Clip.none,
+                children: const [
+                  Icon(Icons.camera_alt_rounded, color: Color(0xFF0A4D8F)),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Icon(
+                      Icons.add_circle,
+                      size: 14,
+                      color: Color(0xFF0A4D8F),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 14),
-              if (_activeIncomingCallId != null)
-                _IncomingCallBanner(
+            ),
+            const SizedBox(width: 6),
+          ],
+        ),
+        drawer: _buildHomeDrawer(uid, _displayName),
+        body: Column(
+          children: [
+            ErrorPresenter.buildStatusStrip(
+              state: _homeRealtimeState,
+              message: _homeRealtimeMessage,
+              onRetry: () {
+                _refreshNetworkInsight();
+                _listenForIncomingCalls();
+              },
+            ),
+            // ── Barra compacta superior: Señal + IA ──────────────
+            _CompactTopBar(
+              networkLabel: _networkLabel,
+              networkColor: _networkColor,
+              latencyMs: _latencyMs,
+              isSatellite: _isSatellite,
+              recommendedMode: _recommendedMode,
+              onOpenIa: () => _open(context, const OrbitIAScreen()),
+            ),
+            // ── Banner llamada entrante ──────────────────────────
+            if (_activeIncomingCallId != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+                child: IncomingCallBanner(
                   callerName: _incomingCallerName ?? 'Usuario Orbit',
                   onAccept: _acceptIncomingCall,
                   onReject: _rejectIncomingCall,
                 ),
-              if (_activeIncomingCallId != null) const SizedBox(height: 14),
-              const _SectionTitle(title: 'Orbit IA Recomienda'),
-              const SizedBox(height: 8),
-              _IaInsightCard(
-                networkLabel: _networkLabel,
-                recommendedMode: _recommendedMode,
-                latencyMs: _latencyMs,
-                isSatellite: _isSatellite,
-                onOpenIa: () => _open(context, const OrbitIAScreen()),
               ),
-              const SizedBox(height: 12),
-            ],
-          ),
+            // ── Lista de chats recientes (estilo WhatsApp) ───────
+            Expanded(
+              child: _RecentChatsList(
+                currentUid: uid,
+                onOpenChat: (contactUid, contactName) => _open(
+                  context,
+                  chat.ChatScreen(
+                    remoteUserId: contactUid,
+                    initialContactName: contactName,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: 0,
-        onTap: _openBottomSection,
-        backgroundColor: const Color(0xFFFFFFFF),
-        selectedItemColor: const Color(0xFF0A4D8F),
-        unselectedItemColor: const Color(0xFF0A4D8F),
-        type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home_rounded),
-            label: 'Inicio',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.chat_bubble_rounded),
-            label: 'Chat',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.call_rounded),
-            label: 'Llamada',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.videocam_rounded),
-            label: 'Video',
-          ),
-        ],
+        bottomNavigationBar: BottomNavigationBar(
+          currentIndex: 0,
+          onTap: _openBottomSection,
+          backgroundColor: const Color(0xFFFFFFFF),
+          selectedItemColor: const Color(0xFF0A4D8F),
+          unselectedItemColor: const Color(0xFF0A4D8F),
+          type: BottomNavigationBarType.fixed,
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home_rounded),
+              label: 'Inicio',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.chat_bubble_rounded),
+              label: 'Chat',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.call_rounded),
+              label: 'Llamada',
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -753,10 +881,7 @@ class _InfoBullet extends StatelessWidget {
               const SizedBox(height: 2),
               Text(
                 description,
-                style: const TextStyle(
-                  color: Color(0xFF5A7388),
-                  fontSize: 11,
-                ),
+                style: const TextStyle(color: Color(0xFF5A7388), fontSize: 11),
               ),
             ],
           ),
@@ -778,130 +903,68 @@ class _NetworkInsight {
   });
 }
 
-class _SectionTitle extends StatelessWidget {
-  final String title;
-
-  const _SectionTitle({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
-      child: Text(
-        title,
-        style: const TextStyle(
-          color: Color(0xFF4D6880),
-          fontWeight: FontWeight.w700,
-          fontSize: 13,
-          letterSpacing: 0.2,
-        ),
-      ),
-    );
-  }
-}
-
-class _HeroSection extends StatelessWidget {
+// ── Barra compacta superior: señal + IA ────────────────────────────────────
+class _CompactTopBar extends StatelessWidget {
   final String networkLabel;
   final Color networkColor;
   final int? latencyMs;
   final bool isSatellite;
+  final String recommendedMode;
+  final VoidCallback onOpenIa;
 
-  const _HeroSection({
+  const _CompactTopBar({
     required this.networkLabel,
     required this.networkColor,
     required this.latencyMs,
     required this.isSatellite,
+    required this.recommendedMode,
+    required this.onOpenIa,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFFE9F4FF), Color(0xFFD9EEFF)],
-        ),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFBCD8EE)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.cloud_done_rounded, color: networkColor, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  networkLabel,
-                  style: TextStyle(
-                    color: networkColor,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              _MetricPill(
-                icon: Icons.speed,
-                value: latencyMs?.toString() ?? '-',
-                unit: 'ms',
-                color: networkColor,
-              ),
-              _MetricPill(
-                icon: Icons.router,
-                value: isSatellite ? 'ðŸ›°ï¸' : 'ðŸ“¶',
-                unit: isSatellite ? 'SatÃ©lite' : 'IP',
-                color: networkColor,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MetricPill extends StatelessWidget {
-  final IconData icon;
-  final String value;
-  final String unit;
-  final Color color;
-
-  const _MetricPill({
-    required this.icon,
-    required this.value,
-    required this.unit,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withAlpha(20),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withAlpha(100)),
-      ),
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 6),
-          Text(
-            '$value $unit',
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w600,
-              fontSize: 11,
+          Icon(Icons.signal_cellular_alt, color: networkColor, size: 16),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              latencyMs != null
+                  ? '$networkLabel · ${latencyMs}ms'
+                  : networkLabel,
+              style: TextStyle(
+                color: networkColor,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          GestureDetector(
+            onTap: onOpenIa,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A4D8F),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.auto_awesome, size: 13, color: Colors.white),
+                  const SizedBox(width: 4),
+                  Text(
+                    'IA · ${capitalize(recommendedMode)}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -910,16 +973,278 @@ class _MetricPill extends StatelessWidget {
   }
 }
 
-class _IncomingCallBanner extends StatelessWidget {
+String capitalize(String s) =>
+    s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+// ── Lista de chats recientes (estilo WhatsApp) ──────────────────────────────
+class _RecentChatsList extends StatelessWidget {
+  final String currentUid;
+  final void Function(String contactUid, String contactName) onOpenChat;
+
+  const _RecentChatsList({required this.currentUid, required this.onOpenChat});
+
+  @override
+  Widget build(BuildContext context) {
+    if (currentUid.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: ResilientStreamHelper.resilientStream<
+          QuerySnapshot<Map<String, dynamic>>>(
+        streamFactory: () => FirebaseFirestore.instance
+            .collection('chatRooms')
+            .where('participants', arrayContains: currentUid)
+            .orderBy('updatedAt', descending: true)
+            .limit(50)
+            .snapshots(),
+        timeout: const Duration(seconds: 15),
+        logTag: 'HomeRecentChats:$currentUid',
+      ),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final docs = snap.data?.docs ?? [];
+
+        if (docs.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.chat_bubble_outline_rounded,
+                  size: 64,
+                  color: Colors.grey.shade300,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Sin conversaciones aún',
+                  style: TextStyle(color: Colors.grey.shade500, fontSize: 15),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Toca Chat para iniciar una conversación',
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return ListView.separated(
+          padding: EdgeInsets.zero,
+          itemCount: docs.length,
+          separatorBuilder: (_, __) =>
+              const Divider(height: 1, indent: 70, color: Color(0xFFEFF3F7)),
+          itemBuilder: (context, i) {
+            final room = docs[i].data();
+            final participants = List<String>.from(
+              room['participants'] as List? ?? [],
+            );
+            final otherUid = participants.firstWhere(
+              (p) => p != currentUid,
+              orElse: () => currentUid,
+            );
+            // Skip stale rooms with invalid/non-UID participants
+            if (otherUid.length < 10 ||
+                !RegExp(r'^[a-zA-Z0-9]+$').hasMatch(otherUid)) {
+              return const SizedBox.shrink();
+            }
+            final lastMsg = room['lastMessage'] as String? ?? '';
+            final lastMsgType = room['lastMessageType'] as String? ?? 'text';
+            final updatedAt = room['updatedAt'];
+            final unread = (room['unread_$currentUid'] as int?) ?? 0;
+
+            return _ChatRoomTile(
+              otherUid: otherUid,
+              lastMessage: lastMsg,
+              lastMessageType: lastMsgType,
+              updatedAt: updatedAt,
+              unreadCount: unread,
+              onTap: (contactName) => onOpenChat(otherUid, contactName),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _ChatRoomTile extends StatelessWidget {
+  final String otherUid;
+  final String lastMessage;
+  final String lastMessageType;
+  final dynamic updatedAt;
+  final int unreadCount;
+  final void Function(String contactName) onTap;
+
+  const _ChatRoomTile({
+    required this.otherUid,
+    required this.lastMessage,
+    required this.lastMessageType,
+    required this.updatedAt,
+    required this.unreadCount,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: FirebaseFirestore.instance
+          .collection('users_public')
+          .doc(otherUid)
+          .get(),
+      builder: (context, userSnap) {
+        final userData = userSnap.data?.data();
+        final name =
+            (userData?['fullName'] as String?)?.trim().isNotEmpty == true
+                ? userData!['fullName'] as String
+                : otherUid;
+        final initials = name.isNotEmpty ? name[0].toUpperCase() : '?';
+
+        String timeStr = '';
+        if (updatedAt is Timestamp) {
+          final dt = (updatedAt as Timestamp).toDate();
+          final now = DateTime.now();
+          if (dt.year == now.year &&
+              dt.month == now.month &&
+              dt.day == now.day) {
+            timeStr =
+                '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+          } else {
+            timeStr = '${dt.day}/${dt.month}';
+          }
+        }
+
+        String preview = lastMessage;
+        if (lastMessageType == 'image') preview = '📷 Imagen';
+        if (lastMessageType == 'audio') preview = '🎤 Audio';
+        if (lastMessageType == 'file') preview = '📎 Archivo';
+        if (preview.isEmpty) preview = 'Toca para abrir el chat';
+
+        return InkWell(
+          onTap: () => onTap(name),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                // Avatar
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF62D2FF), Color(0xFF2F94FF)],
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Nombre + preview
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        style: TextStyle(
+                          color: const Color(0xFF16324F),
+                          fontWeight: unreadCount > 0
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                          fontSize: 15,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        preview,
+                        style: TextStyle(
+                          color: unreadCount > 0
+                              ? const Color(0xFF0A4D8F)
+                              : const Color(0xFF8AA4BF),
+                          fontSize: 13,
+                          fontWeight: unreadCount > 0
+                              ? FontWeight.w500
+                              : FontWeight.normal,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                // Hora + badge
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      timeStr,
+                      style: TextStyle(
+                        color: unreadCount > 0
+                            ? const Color(0xFF0A4D8F)
+                            : const Color(0xFFADBCC9),
+                        fontSize: 11,
+                      ),
+                    ),
+                    if (unreadCount > 0) ...[
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF0A4D8F),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(
+                          unreadCount > 99 ? '99+' : '$unreadCount',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ...existing code...
+// ...existing code...
+class IncomingCallBanner extends StatelessWidget {
   final String callerName;
   final VoidCallback onAccept;
   final VoidCallback onReject;
 
-  const _IncomingCallBanner({
+  const IncomingCallBanner({
+    Key? key,
     required this.callerName,
     required this.onAccept,
     required this.onReject,
-  });
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -935,7 +1260,7 @@ class _IncomingCallBanner extends StatelessWidget {
       child: Column(
         children: [
           Text(
-            '$callerName te estÃ¡ llamando...',
+            '$callerName te está llamando...',
             style: const TextStyle(
               color: Color(0xFFE53935),
               fontWeight: FontWeight.w700,
@@ -974,87 +1299,5 @@ class _IncomingCallBanner extends StatelessWidget {
   }
 }
 
-class _IaInsightCard extends StatelessWidget {
-  final String networkLabel;
-  final String recommendedMode;
-  final int? latencyMs;
-  final bool isSatellite;
-  final VoidCallback onOpenIa;
-
-  const _IaInsightCard({
-    required this.networkLabel,
-    required this.recommendedMode,
-    required this.latencyMs,
-    required this.isSatellite,
-    required this.onOpenIa,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFFFF),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFBCD8EE)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(10),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.lightbulb_rounded,
-                  color: Color(0xFFFFC46C), size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'RecomendaciÃ³n: $recommendedMode',
-                  style: const TextStyle(
-                    color: Color(0xFF0A4D8F),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Tu red estÃ¡ lista para: ${recommendedMode.capitalizeFirst()}',
-            style: const TextStyle(
-              color: Color(0xFF5A7388),
-              fontSize: 12,
-            ),
-          ),
-          const SizedBox(height: 10),
-          ElevatedButton(
-            onPressed: onOpenIa,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0A4D8F),
-              minimumSize: const Size(double.infinity, 36),
-            ),
-            child: const Text(
-              'Abrir Orbit IA',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-extension on String {
-  String capitalizeFirst() {
-    if (isEmpty) return this;
-    return this[0].toUpperCase() + substring(1);
-  }
-}
+//
+//

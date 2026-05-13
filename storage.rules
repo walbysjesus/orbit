@@ -33,6 +33,35 @@ service firebase.storage {
       return request.resource.contentType.matches('video/.*');
     }
 
+    // Tipos MIME aceptados para documentos y archivos seguros
+    function isAllowedApplication() {
+      // Permite solo tipos seguros y bloquea ejecutables
+      return (
+        // Documentos
+        request.resource.contentType.matches('application/pdf') ||
+        request.resource.contentType.matches('application/msword') ||
+        request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.wordprocessingml.document') ||
+        request.resource.contentType.matches('application/vnd.ms-excel') ||
+        request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') ||
+        request.resource.contentType.matches('application/vnd.ms-powerpoint') ||
+        request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.presentationml.presentation') ||
+        request.resource.contentType.matches('text/plain') ||
+        // Archivos comprimidos
+        request.resource.contentType.matches('application/zip') ||
+        request.resource.contentType.matches('application/x-rar-compressed') ||
+        // Bloquea ejecutables y scripts
+        !request.resource.contentType.matches('application/x-msdownload') &&
+        !request.resource.contentType.matches('application/x-dosexec') &&
+        !request.resource.contentType.matches('application/x-sh') &&
+        !request.resource.contentType.matches('application/x-executable') &&
+        !request.resource.contentType.matches('application/x-msinstaller') &&
+        !request.resource.contentType.matches('application/x-bash') &&
+        !request.resource.contentType.matches('application/x-csh') &&
+        !request.resource.contentType.matches('application/x-python') &&
+        !request.resource.contentType.matches('application/x-elf')
+      );
+    }
+
     // ------------------------------------------------------------------
     // /users/{userId}/avatar/  — foto de perfil (solo propietario escribe)
     // ------------------------------------------------------------------
@@ -57,8 +86,8 @@ service firebase.storage {
 
       allow read: if isRoomParticipant();
       allow write: if isRoomParticipant()
-                   && (isImage() || isAudio() || isVideo())
-                   && maxSize(25);  // 25 MB por archivo
+           && (isImage() || isAudio() || isVideo() || isAllowedApplication())
+           && maxSize(25);  // 25 MB por archivo
       allow delete: if isRoomParticipant();
     }
 

@@ -1,0 +1,146 @@
+name: Firebase App Distribution
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: firebase-distribution-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  distribute-android:
+    name: Build and Distribute Signed APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      JAVA_VERSION: "17"
+      FLUTTER_CHANNEL: stable
+      APK_PATH: build/app/outputs/flutter-apk/app-release.apk
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Flutter Version
+        run: flutter --version
+
+      - name: Restore Pub Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Validate Required Secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" || (echo "Missing secret: ANDROID_KEYSTORE_BASE64" && exit 1)
+          test -n "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" || (echo "Missing secret: ANDROID_KEYSTORE_PASSWORD" && exit 1)
+          test -n "${{ secrets.ANDROID_KEY_ALIAS }}" || (echo "Missing secret: ANDROID_KEY_ALIAS" && exit 1)
+          test -n "${{ secrets.ANDROID_KEY_PASSWORD }}" || (echo "Missing secret: ANDROID_KEY_PASSWORD" && exit 1)
+          test -n "${{ secrets.FIREBASE_TOKEN }}" || (echo "Missing secret: FIREBASE_TOKEN" && exit 1)
+          test -n "${{ secrets.FIREBASE_APP_ID_ANDROID }}" || (echo "Missing secret: FIREBASE_APP_ID_ANDROID" && exit 1)
+
+      - name: Prepare Android Signing Files
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/keystore.jks
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=../keystore.jks
+          EOF
+
+      - name: Static Analysis
+        run: flutter analyze
+
+      - name: Automated Tests
+        run: flutter test --reporter expanded
+
+      - name: Build Signed Release APK (optimized)
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build apk \
+            --release \
+            --tree-shake-icons \
+            --obfuscate \
+            --split-debug-info=build/symbols
+
+      - name: Verify APK Exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "${{ env.APK_PATH }}" || (echo "APK not found at ${{ env.APK_PATH }}" && exit 1)
+          ls -lh "${{ env.APK_PATH }}"
+
+      - name: Setup Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Distribute to Firebase App Distribution
+        shell: bash
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_APP_ID_ANDROID: ${{ secrets.FIREBASE_APP_ID_ANDROID }}
+          FIREBASE_TESTER_GROUPS: ${{ secrets.FIREBASE_TESTER_GROUPS }}
+        run: |
+          set -euo pipefail
+          RELEASE_NOTES="CI build ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}"
+
+          if [ -n "${FIREBASE_TESTER_GROUPS:-}" ]; then
+            firebase appdistribution:distribute "${{ env.APK_PATH }}" \
+              --app "$FIREBASE_APP_ID_ANDROID" \
+              --token "$FIREBASE_TOKEN" \
+              --release-notes "$RELEASE_NOTES" \
+              --groups "$FIREBASE_TESTER_GROUPS"
+          else
+            firebase appdistribution:distribute "${{ env.APK_PATH }}" \
+              --app "$FIREBASE_APP_ID_ANDROID" \
+              --token "$FIREBASE_TOKEN" \
+              --release-notes "$RELEASE_NOTES"
+          fi
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firebase-distribution-apk
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            build/symbols/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup Sensitive Files
+        if: always()
+        shell: bash
+        run: |
+          rm -f android/key.properties android/keystore.jks

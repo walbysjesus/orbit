@@ -19,6 +19,21 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+val lowMemoryBuild = providers.gradleProperty("orbit.lowMemoryBuild").orNull == "true"
+
+if (lowMemoryBuild) {
+    subprojects {
+        // Optional low-memory mode for local builds.
+        tasks.matching {
+            it.name == "lintVitalAnalyzeRelease" ||
+                it.name == "lintAnalyzeRelease" ||
+                it.name == "lintRelease"
+        }.configureEach {
+            enabled = false
+        }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

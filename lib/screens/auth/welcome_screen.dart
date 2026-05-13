@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:orbit/services/subscription_service.dart';
+import '../../utils/ui_helpers.dart';
 
 // ================= WELCOME SCREEN =================
 
@@ -37,7 +38,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
         math.min(size.width * 0.46, size.height * 0.28).clamp(160.0, 220.0);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF001F3F),
+      backgroundColor: const Color(0xFFFFFFFF),
       floatingActionButton: const LanguageFab(),
       body: SafeArea(
         child: LayoutBuilder(
@@ -56,7 +57,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                           '¡Bienvenido a',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: Colors.white70,
+                            color: Color(0xFF3389FF),
                             fontSize: 20,
                             fontWeight: FontWeight.w300,
                             letterSpacing: 1.2,
@@ -69,20 +70,22 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                           child: Stack(
                             alignment: Alignment.center,
                             children: [
-                              AnimatedBuilder(
-                                animation: _controller,
-                                builder: (_, __) {
-                                  return CustomPaint(
-                                    painter: SpherePainter(
-                                      angle: _controller.value * 2 * math.pi,
-                                    ),
-                                  );
-                                },
+                              SizedBox.expand(
+                                child: AnimatedBuilder(
+                                  animation: _controller,
+                                  builder: (_, __) {
+                                    return CustomPaint(
+                                      painter: SpherePainter(
+                                        angle: _controller.value * 2 * math.pi,
+                                      ),
+                                    );
+                                  },
+                                ),
                               ),
                               const Text(
                                 'ORBIT',
                                 style: TextStyle(
-                                  color: Colors.white,
+                                  color: Color(0xFF0A4D8F),
                                   fontSize: 36,
                                   fontWeight: FontWeight.bold,
                                   letterSpacing: 3,
@@ -98,7 +101,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                             'Conectando el mundo, en todas partes',
                             textAlign: TextAlign.center,
                             style: const TextStyle(
-                              color: Colors.white54,
+                              color: Color(0xFF3389FF),
                               fontSize: 16,
                             ),
                           ),
@@ -107,7 +110,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         Text(
                           'Plan actual: ${subscriptionService.level.name.toUpperCase()}',
                           style: const TextStyle(
-                              color: Colors.white60, fontSize: 14),
+                              color: Color(0xFF3389FF), fontSize: 14),
                         ),
                         const SizedBox(height: 8),
                         Semantics(
@@ -117,7 +120,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                             onPressed: () =>
                                 Navigator.pushNamed(context, '/login'),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF3389FF),
+                              backgroundColor: const Color(0xFF0A4D8F),
                               foregroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(30),
@@ -145,10 +148,10 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                               '¿No tienes cuenta? Regístrate',
                               textAlign: TextAlign.center,
                               style: TextStyle(
-                                color: Colors.white70,
+                                color: Color(0xFF0A4D8F),
                                 fontSize: 18,
                                 decoration: TextDecoration.underline,
-                                decorationColor: Colors.white70,
+                                decorationColor: Color(0xFF0A4D8F),
                               ),
                             ),
                           ),
@@ -202,60 +205,6 @@ class _FadeInWelcomeState extends State<FadeInWelcome>
   }
 }
 
-// ================= LANGUAGE FAB =================
-
-class LanguageFab extends StatefulWidget {
-  const LanguageFab({super.key});
-
-  @override
-  State<LanguageFab> createState() => _LanguageFabState();
-}
-
-class _LanguageFabState extends State<LanguageFab> {
-  String _selected = 'es';
-
-  final Map<String, String> _langs = const {
-    'es': 'Español',
-    'en': 'English',
-    'fr': 'Français',
-    'de': 'Deutsch',
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      label: 'Idioma',
-      child: FloatingActionButton(
-        tooltip: 'Cambiar idioma',
-        backgroundColor: const Color(0xFF3389FF),
-        child: const Icon(Icons.language, semanticLabel: 'Idioma'),
-        onPressed: () async {
-          final result = await showModalBottomSheet<String>(
-            context: context,
-            builder: (_) => Column(
-              mainAxisSize: MainAxisSize.min,
-              children: _langs.entries.map((e) {
-                return ListTile(
-                  leading: _selected == e.key
-                      ? const Icon(Icons.check, color: Color(0xFF3389FF))
-                      : null,
-                  title: Text(e.value),
-                  onTap: () => Navigator.pop(context, e.key),
-                );
-              }).toList(),
-            ),
-          );
-
-          if (result != null) {
-            setState(() => _selected = result);
-          }
-        },
-      ),
-    );
-  }
-}
-
 // ================= SPHERE PAINTER =================
 
 class SpherePainter extends CustomPainter {
@@ -269,7 +218,7 @@ class SpherePainter extends CustomPainter {
 
     final paintSphere = Paint()
       ..shader = const RadialGradient(
-        colors: [Colors.white, Color(0xFF3389FF)],
+        colors: [Color(0xFF5BAEF7), Color(0xFF0A4D8F)],
       ).createShader(
         Rect.fromCircle(center: center, radius: radius),
       );
@@ -277,15 +226,17 @@ class SpherePainter extends CustomPainter {
     canvas.drawCircle(center, radius, paintSphere);
 
     final orbitPaint = Paint()
-      ..color = Colors.white38
+      ..color = const Color(0x663389FF)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
 
-    for (int i = 0; i < 3; i++) {
-      canvas.drawCircle(center, radius + 15 + (i * 12), orbitPaint);
+    final ringRadii = <double>[radius + 15, radius + 27, radius + 39];
+
+    for (final ringRadius in ringRadii) {
+      canvas.drawCircle(center, ringRadius, orbitPaint);
     }
 
-    final satelliteR = radius + 28;
+    final satelliteR = ringRadii[1];
     final satellite = Offset(
       center.dx + satelliteR * math.cos(angle),
       center.dy + satelliteR * math.sin(angle),

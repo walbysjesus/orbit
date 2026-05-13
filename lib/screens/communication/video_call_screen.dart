@@ -1,17 +1,26 @@
 import 'dart:async';
+import 'dart:math';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' hide AndroidAudioMode;
+import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../config/config.dart';
 import '../../services/auth_service.dart';
+import '../../services/call_diagnostics_service.dart';
 import '../../services/call_session_service.dart';
 import '../../services/network_service.dart';
+import '../../services/webrtc_service.dart';
 import '../../services/firestore_signaling.dart';
+import '../../services/turn_stun_config.dart';
 import '../../utils/camera_icon_button.dart';
+import '../../utils/error_presenter.dart';
 
 // Variables globales eliminadas, deben estar dentro del State
 
@@ -21,6 +30,9 @@ class VideoCallScreen extends StatefulWidget {
 
   /// UID del usuario remoto (para mostrar en UI y enrutar sala).
   final String? remoteUserId;
+
+  /// Nombre conocido del usuario remoto, si ya fue resuelto antes de abrir la llamada.
+  final String? initialRemoteDisplayName;
 
   /// Si es true, inicia una llamada de voz (sin video local/remoto).
   final bool audioOnly;
@@ -35,6 +47,7 @@ class VideoCallScreen extends StatefulWidget {
     super.key,
     this.roomId,
     this.remoteUserId,
+    this.initialRemoteDisplayName,
     this.audioOnly = false,
     this.isCaller,
     this.callSessionId,
@@ -44,10 +57,42 @@ class VideoCallScreen extends StatefulWidget {
   State<VideoCallScreen> createState() => _VideoCallScreenState();
 }
 
-class _VideoCallScreenState extends State<VideoCallScreen> {
+class _VideoCallScreenState extends State<VideoCallScreen>
+    with WidgetsBindingObserver {
+  // ========== MEMORY & STABILITY CONSTANTS ==========
+  static const int _maxPendingIceCandidates = 300;
+
+  Future<void> _toggleVideo() async {
+    setState(() => _videoEnabled = !_videoEnabled);
+    if (_localStream == null) return;
+    final videoTracks = _localStream!.getVideoTracks();
+    for (final track in videoTracks) {
+      track.enabled = _videoEnabled;
+    }
+    if (_videoEnabled && videoTracks.isEmpty) {
+      // Si no hay track de video, intenta agregarlo
+      final videoStream =
+          await navigator.mediaDevices.getUserMedia({'video': true});
+      final videoTrack = videoStream.getVideoTracks().first;
+      await _localStream!.addTrack(videoTrack);
+      await _peerConnection?.addTrack(videoTrack, _localStream!);
+    }
+    if (!_videoEnabled && videoTracks.isNotEmpty) {
+      for (final track in videoTracks) {
+        await track.stop();
+        await _localStream!.removeTrack(track);
+      }
+    }
+    if (!mounted) return; // lifecycle safety fix
+    setState(() {});
+  }
+
+  bool _videoEnabled = false;
   late final FirestoreSignaling _signaling;
   RTCPeerConnection? _peerConnection;
   bool _offerSent = false;
+  String? _remoteDisplayName;
+  String? _remoteOrbitNumber;
 
   late String _roomId;
   String? _localUserId;
@@ -56,11 +101,63 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   bool _remotePeerJoined = false;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _callSub;
   Timer? _networkTimer;
+  Timer? _iceRestartTimer;
+  Timer? _iceRecoveryTimeoutTimer;
+  Timer? _iceHeartbeatTimer;
+  Timer? _ringTimeoutTimer;
+  Timer? _connectTimeoutTimer;
   String _networkLabel = 'Analizando señal...';
   Color _networkColor = const Color(0xFF8FA9C2);
   bool _isSatelliteNetwork = false;
   int? _latencyMs;
+  NetworkQuality _networkQuality = NetworkQuality.unknown;
+  bool _videoDegraded = false;
   bool _controlsExpanded = false;
+  RealtimeUxState _callRealtimeState = RealtimeUxState.reconnecting;
+  String _callRealtimeMessage = 'Conectando llamada...';
+  String _sessionStatus = 'n/d';
+  String _iceStatus = 'n/d';
+  String _pcStatus = 'n/d';
+  String _signalStatus = 'n/d';
+  String _localPathType = 'n/d';
+  String _remotePathType = 'n/d';
+  int _localCandidateCount = 0;
+  int _remoteCandidateCount = 0;
+  bool _remoteDescriptionSet = false;
+  final List<RTCIceCandidate> _pendingRemoteCandidates = <RTCIceCandidate>[];
+  final NetworkService _networkService = NetworkService();
+  CallAdaptiveProfile _adaptiveProfile = const CallAdaptiveProfile(
+    maxWidth: 1280,
+    maxHeight: 720,
+    maxFps: 24,
+    targetBitrateKbps: 1200,
+    minBitrateKbps: 350,
+    pauseVideo: false,
+    batterySaver: false,
+    thermalLevel: ThermalLevel.cool,
+  );
+  bool _batterySaverMode = false;
+  ThermalLevel _thermalLevel = ThermalLevel.cool;
+  String? _lastAdaptiveProfileKey;
+
+  // ========== PHASE 2: ICE RECONNECTION LOGIC ==========
+  int _iceReconnectAttempts = 0;
+  static const int _maxIceReconnectAttempts = 6;
+  static const int _minIceReconnectDelayMs = 2000; // 2 seconds
+  static const int _maxIceReconnectDelayMs = 30000;
+  static const int _maxReconnectStormPerMinute = 8;
+  static const Duration _restartSignalCooldown = Duration(seconds: 4);
+  static const Duration _iceRecoveryTimeout = Duration(seconds: 18);
+  static const Duration _iceHeartbeatInterval = Duration(seconds: 8);
+  static const int _heartbeatUnhealthyThreshold = 2;
+  final Random _random = Random();
+  bool _iceRecoveryInProgress = false;
+  DateTime _restartStormWindowStart = DateTime.now();
+  int _restartStormCount = 0;
+  DateTime? _lastRestartSignalAt;
+  DateTime? _lastRecoveryTriggerAt;
+  int _heartbeatUnhealthyTicks = 0;
+  final Set<String> _handledRestartRequestIds = <String>{};
 
   late Stopwatch _stopwatch;
   late final Ticker _ticker;
@@ -69,19 +166,50 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   // flutter_webrtc
   final _localRenderer = RTCVideoRenderer();
   final _remoteRenderer = RTCVideoRenderer();
+  final AudioPlayer _ringPlayer = AudioPlayer();
   MediaStream? _localStream;
+  bool _ringtonePlaying = false;
+  bool _roomCleanupStarted = false;
+  static const MethodChannel _androidVoipChannel = MethodChannel('orbit/voip');
 
   @override
   void initState() {
+    _videoEnabled = !widget.audioOnly;
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+
+    // ========== PHASE 2: TURN/STUN VALIDATION ==========
+    // Block calls in release mode if TURN not configured
+    final turnError = TurnStunConfig.shouldBlockCallInRelease();
+    if (turnError != null) {
+      _showBanner(
+        turnError,
+        Colors.red,
+        persistent: true,
+      );
+      // Schedule pop after showing error
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) Navigator.pop(context);
+      });
+      return;
+    }
+
+    // Log diagnostic info for debugging
+    _logRtc(TurnStunConfig.getDiagnosticInfo());
+
     _localUserId = AuthService.getCurrentUser()?.uid;
+    _remoteDisplayName = widget.initialRemoteDisplayName?.trim();
     _roomId = _resolveRoomId();
     _isCaller = widget.isCaller ?? _resolveCallerRole();
     _callSessionId = widget.callSessionId;
     _signaling = FirestoreSignaling(roomId: _roomId, isCaller: _isCaller);
-    _stopwatch = Stopwatch()..start();
+    _androidVoipChannel.setMethodCallHandler(_handleNativeVoipEvent);
+    unawaited(_initNativeVoipPlatform());
+    speakerOn = widget.audioOnly;
+    unawaited(_configureAudioRouting());
+    _stopwatch = Stopwatch();
     _ticker = Ticker((_) {
-      if (mounted) {
+      if (mounted && _stopwatch.isRunning) {
         setState(() {
           final seconds = _stopwatch.elapsed.inSeconds;
           final min = (seconds ~/ 60).toString().padLeft(2, '0');
@@ -92,6 +220,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     });
     _ticker.start();
     _showRealtimeConfigWarnings();
+    unawaited(_loadRemoteUserSummary());
     _initCall();
     _initCallSession();
     unawaited(_refreshNetworkStatus());
@@ -112,10 +241,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   }
 
   Future<void> _refreshNetworkStatus() async {
-    final service = NetworkService();
-    final quality = await service.getNetworkQuality();
-    final latency = await service.measureLatencyMs();
-    final isSatellite = await service.isSatelliteConnected();
+    final quality = await _networkService.getNetworkQuality();
+    final latency = await _networkService.measureLatencyMs();
+    final isSatellite = await _networkService.isSatelliteConnected();
 
     String label;
     Color color;
@@ -147,13 +275,133 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       label = '$label · 🛰️ Satélite';
     }
 
+    final nextProfile = _networkService.getAdaptiveCallProfile(
+      audioOnly: widget.audioOnly,
+      quality: quality,
+      isSatellite: isSatellite,
+      latencyMs: latency,
+      reconnectAttempts: _iceReconnectAttempts,
+      unhealthyHeartbeatTicks: _heartbeatUnhealthyTicks,
+      batterySaverHint:
+          _stopwatch.isRunning && _stopwatch.elapsed.inMinutes >= 8,
+    );
+
+    if (nextProfile.batterySaver) {
+      label = '$label · ahorro';
+    }
+    if (nextProfile.thermalLevel == ThermalLevel.hot ||
+        nextProfile.thermalLevel == ThermalLevel.critical) {
+      label = '$label · térmico alto';
+    }
+
     if (!mounted) return;
     setState(() {
-      _networkLabel = latency == null ? label : '$label · ${latency} ms';
+      _networkLabel = latency == null ? label : '$label · $latency ms';
       _networkColor = color;
       _latencyMs = latency;
       _isSatelliteNetwork = isSatellite;
+      _networkQuality = quality;
+      _adaptiveProfile = nextProfile;
+      _batterySaverMode = nextProfile.batterySaver;
+      _thermalLevel = nextProfile.thermalLevel;
+      if (quality == NetworkQuality.none) {
+        _callRealtimeState = RealtimeUxState.offline;
+        _callRealtimeMessage =
+            'Sin internet. Intentando recuperar la llamada...';
+      } else if (_iceRecoveryInProgress) {
+        _callRealtimeState = RealtimeUxState.reconnecting;
+        _callRealtimeMessage = 'Reconectando llamada en tiempo real...';
+      } else {
+        _callRealtimeState = RealtimeUxState.online;
+        _callRealtimeMessage = 'Llamada estable';
+      }
     });
+
+    _logRtc(
+        'adaptive_profile bitrate=${nextProfile.targetBitrateKbps}kbps min=${nextProfile.minBitrateKbps}kbps res=${nextProfile.maxWidth}x${nextProfile.maxHeight} fps=${nextProfile.maxFps} pauseVideo=${nextProfile.pauseVideo} batterySaver=${nextProfile.batterySaver} thermal=${nextProfile.thermalLevel.name}');
+
+    _trackAdaptiveProfileTransition(nextProfile);
+
+    await _applyAdaptiveMediaProfile();
+  }
+
+  void _trackAdaptiveProfileTransition(CallAdaptiveProfile profile) {
+    final tier = profile.pauseVideo
+        ? 'critical'
+        : (profile.batterySaver ? 'saver' : 'high');
+    final key = '$tier|${profile.maxWidth}x${profile.maxHeight}|'
+        '${profile.maxFps}|${profile.targetBitrateKbps}|'
+        '${profile.minBitrateKbps}|${profile.thermalLevel.name}';
+    if (_lastAdaptiveProfileKey == key) return;
+
+    _lastAdaptiveProfileKey = key;
+    unawaited(
+      _auditCall(
+        'adaptive_profile_changed',
+        extra: {
+          'adaptiveTier': tier,
+          'adaptiveWidth': profile.maxWidth,
+          'adaptiveHeight': profile.maxHeight,
+          'adaptiveFps': profile.maxFps,
+          'adaptiveTargetBitrateKbps': profile.targetBitrateKbps,
+          'adaptiveMinBitrateKbps': profile.minBitrateKbps,
+          'adaptivePauseVideo': profile.pauseVideo,
+          'adaptiveBatterySaver': profile.batterySaver,
+          'adaptiveThermalLevel': profile.thermalLevel.name,
+        },
+      ),
+    );
+  }
+
+  Future<void> _applyAdaptiveMediaProfile() async {
+    if (widget.audioOnly || _localStream == null) return;
+
+    final videoTracks = _localStream!.getVideoTracks();
+    if (videoTracks.isEmpty) return;
+
+    if (_adaptiveProfile.pauseVideo) {
+      for (final track in videoTracks) {
+        track.enabled = false;
+      }
+      if (mounted) {
+        setState(() {
+          _videoDegraded = true;
+        });
+      }
+      _showBanner(
+        'Modo resiliente: video pausado para priorizar audio/datos/temperatura',
+        Colors.orangeAccent,
+      );
+      return;
+    }
+
+    for (final track in videoTracks) {
+      track.enabled = true;
+      try {
+        await track.applyConstraints({
+          'width': _adaptiveProfile.maxWidth,
+          'height': _adaptiveProfile.maxHeight,
+          'frameRate': _adaptiveProfile.maxFps,
+        });
+      } catch (e) {
+        _logRtc('video applyConstraints failed: $e');
+      }
+    }
+
+    final shouldMarkDegraded = _adaptiveProfile.maxHeight <= 480 ||
+        _adaptiveProfile.maxFps <= 18 ||
+        _adaptiveProfile.batterySaver;
+    if (mounted) {
+      setState(() {
+        _videoDegraded = shouldMarkDegraded;
+      });
+    }
+    if (!shouldMarkDegraded && mounted) {
+      _showBanner(
+        'Red recuperada: video reactivado',
+        Colors.green,
+      );
+    }
   }
 
   String _buildAutoRoomId() {
@@ -192,30 +440,278 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   @override
   void dispose() {
+    _androidVoipChannel.setMethodCallHandler(null);
+    WidgetsBinding.instance.removeObserver(this);
+    // ========== PHASE 1: COMPREHENSIVE MEMORY CLEANUP ==========
+    // 1. Stop active sessions and timers
+    unawaited(_stopOutgoingRingtone());
     unawaited(_endSessionIfNeeded());
+    unawaited(_cleanupSignalingRoomIfNeeded());
+
+    // 2. Cancel all stream subscriptions
     _callSub?.cancel();
+    _callSub = null;
+
+    // 3. Cancel all timers (prevents background execution)
     _networkTimer?.cancel();
-    _localRenderer.srcObject = null;
-    _remoteRenderer.srcObject = null;
+    _iceRestartTimer?.cancel();
+    _iceRecoveryTimeoutTimer?.cancel();
+    _iceHeartbeatTimer?.cancel();
+    _ringTimeoutTimer?.cancel();
+    _connectTimeoutTimer?.cancel();
+
+    // 4. Clear ICE buffer to prevent memory leak
+    _pendingRemoteCandidates.clear();
+
+    // 5. Stop all audio/video tracks (releases hardware resources)
     if (_localStream != null) {
       for (final track in _localStream!.getTracks()) {
-        track.stop();
+        try {
+          track.stop();
+        } catch (e) {
+          _logRtc('⚠️ Error stopping track: $e');
+        }
       }
-      _localStream!.dispose();
+      try {
+        _localStream!.dispose();
+      } catch (e) {
+        _logRtc('⚠️ Error disposing stream: $e');
+      }
       _localStream = null;
     }
-    _peerConnection?.close();
-    _peerConnection?.dispose();
-    _signaling.close();
+
+    // 6. Clear renderers and close peer connection
+    _localRenderer.srcObject = null;
+    _remoteRenderer.srcObject = null;
+    try {
+      _peerConnection?.close();
+      _peerConnection?.dispose();
+    } catch (e) {
+      _logRtc('⚠️ Error closing peer connection: $e');
+    }
+    _peerConnection = null;
+
+    // 7. Stop signaling
+    try {
+      unawaited(_stopNativeVoipForeground());
+      unawaited(_setNativeNormalAudioMode());
+      unawaited(_signaling.close());
+    } catch (e) {
+      _logRtc('⚠️ Error closing signaling: $e');
+    }
+
+    // 8. Stop animation and audio
     _ticker.dispose();
     _stopwatch.stop();
-    _localRenderer.dispose();
-    _remoteRenderer.dispose();
+
+    // 9. Properly dispose audio player (must await to ensure cleanup)
+    try {
+      unawaited(_ringPlayer.stop());
+      unawaited(_ringPlayer.release());
+      unawaited(_ringPlayer.dispose());
+    } catch (e) {
+      _logRtc('⚠️ Error disposing audio player: $e');
+    }
+
+    // 10. Dispose renderers
+    try {
+      _localRenderer.dispose();
+      _remoteRenderer.dispose();
+    } catch (e) {
+      _logRtc('⚠️ Error disposing renderers: $e');
+    }
+
+    _ringtonePlaying = false;
+    _remoteDescriptionSet = false;
+    _offerSent = false;
+
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return;
+    }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      unawaited(_startNativeVoipForeground());
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_setNativeVoipAudioMode());
+      unawaited(_refreshNetworkStatus());
+      final iceState = _peerConnection?.iceConnectionState;
+      final healthy =
+          iceState == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+              iceState == RTCIceConnectionState.RTCIceConnectionStateCompleted;
+      if (!healthy && mounted) {
+        _requestIceRecovery(
+          reason: 'app_resumed_recovery',
+          trigger: 'lifecycle_resumed',
+        );
+      }
+    }
+  }
+
+  Future<void> _initNativeVoipPlatform() async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return;
+    }
+    try {
+      await _androidVoipChannel.invokeMethod('ensureVoipRuntimeSetup');
+      await _setNativeVoipAudioMode();
+      await _startNativeVoipForeground();
+      final report =
+          await _androidVoipChannel.invokeMethod<Map<dynamic, dynamic>>(
+        'getVoipCapabilityReport',
+      );
+      _logRtc('android_voip_report=$report');
+
+      final manufacturer =
+          (await _androidVoipChannel.invokeMethod<String>('getManufacturer') ??
+                  '')
+              .toLowerCase();
+
+      final ignoringBattery = await _androidVoipChannel
+              .invokeMethod<bool>('isIgnoringBatteryOptimizations') ??
+          false;
+      if (!ignoringBattery && mounted) {
+        _showBanner(
+          'Recomendado: desactivar optimización de batería para llamadas estables',
+          Colors.orangeAccent,
+          onRetry: () {
+            unawaited(
+              _androidVoipChannel
+                  .invokeMethod('openBatteryOptimizationSettings'),
+            );
+          },
+        );
+      }
+
+      final needsOemGuidance =
+          defaultTargetPlatform == TargetPlatform.android &&
+              (manufacturer.contains('xiaomi') ||
+                  manufacturer.contains('huawei') ||
+                  manufacturer.contains('samsung') ||
+                  manufacturer.contains('oppo') ||
+                  manufacturer.contains('vivo') ||
+                  manufacturer.contains('oneplus'));
+      if (needsOemGuidance && mounted) {
+        _showBanner(
+          'Activa auto-inicio en ajustes OEM para mejorar recepción de llamadas',
+          Colors.blueGrey,
+          onRetry: () {
+            unawaited(
+              _androidVoipChannel.invokeMethod('openOemAutostartSettings'),
+            );
+          },
+        );
+      }
+    } catch (e) {
+      _logRtc('android voip helper unavailable: $e');
+    }
+  }
+
+  Future<void> _setNativeVoipAudioMode() async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return;
+    }
+    try {
+      await _androidVoipChannel.invokeMethod('setVoipAudioMode', {
+        'speakerOn': speakerOn,
+      });
+    } catch (e) {
+      _logRtc('setVoipAudioMode failed: $e');
+    }
+  }
+
+  Future<void> _setNativeNormalAudioMode() async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return;
+    }
+    try {
+      await _androidVoipChannel.invokeMethod('setNormalAudioMode');
+    } catch (e) {
+      _logRtc('setNormalAudioMode failed: $e');
+    }
+  }
+
+  Future<void> _startNativeVoipForeground() async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return;
+    }
+    try {
+      await _androidVoipChannel.invokeMethod('startVoipForeground', {
+        'title': 'Llamada Orbit en curso',
+      });
+    } catch (e) {
+      _logRtc('startVoipForeground failed: $e');
+    }
+  }
+
+  Future<void> _stopNativeVoipForeground() async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return;
+    }
+    try {
+      await _androidVoipChannel.invokeMethod('stopVoipForeground');
+    } catch (e) {
+      _logRtc('stopVoipForeground failed: $e');
+    }
+  }
+
+  Future<void> _handleNativeVoipEvent(MethodCall call) async {
+    switch (call.method) {
+      case 'onNativeCallAnswered':
+        _logRtc('native call answered event=${call.arguments}');
+        if (_callSessionId != null && _callSessionId!.isNotEmpty) {
+          unawaited(CallSessionService.acceptSession(_callSessionId!));
+        }
+        _startCallTimerIfNeeded();
+        if (_isCaller && _localStream != null) {
+          unawaited(_createAndSendOffer());
+        }
+        break;
+      case 'onNativeCallEnded':
+        _logRtc('native call ended event=${call.arguments}');
+        if (_callSessionId != null && _callSessionId!.isNotEmpty) {
+          unawaited(CallSessionService.endSession(_callSessionId!));
+        }
+        if (mounted && context.mounted) {
+          Navigator.of(context).maybePop();
+        }
+        break;
+      case 'onPushKitIncoming':
+        _logRtc('pushkit incoming payload=${call.arguments}');
+        break;
+      case 'onPushKitToken':
+        _logRtc('pushkit token event=${call.arguments}');
+        break;
+      default:
+        _logRtc('native voip event ignored=${call.method}');
+        break;
+    }
   }
 
   Future<void> _initCallSession() async {
     if (_callSessionId != null && _callSessionId!.isNotEmpty) {
+      if (_isCaller) {
+        _startOutgoingRingtone();
+      }
       _listenCallSession(_callSessionId!);
       return;
     }
@@ -227,12 +723,30 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     try {
       final createdId = await CallSessionService.createOutgoingSession(
         calleeId: remote,
+        audioOnly: widget.audioOnly,
       );
       if (!mounted) return;
       setState(() => _callSessionId = createdId);
+      unawaited(_auditCall('session_created',
+          extra: {'audioOnly': widget.audioOnly}));
+      _startOutgoingRingtone();
       _listenCallSession(createdId);
+      _armConnectTimeout();
+
+      // Timer: si en 30s no contestó, cancelar y volver.
+      _ringTimeoutTimer = Timer(const Duration(seconds: 30), () async {
+        if (!mounted) return; // lifecycle safety fix
+        _stopOutgoingRingtone();
+        await CallSessionService.cancelExpiredRinging(createdId);
+        if (!mounted) return; // lifecycle safety fix
+        _showBanner('Sin respuesta', Colors.blueGrey);
+        await Future.delayed(const Duration(seconds: 1));
+        if (!mounted) return; // lifecycle safety fix
+        Navigator.of(context).pop();
+      });
     } catch (_) {
       if (!mounted) return;
+      unawaited(_auditCall('session_create_failed'));
       _showBanner('No se pudo crear sesión de llamada', Colors.orangeAccent);
     }
   }
@@ -245,19 +759,111 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       final status = (data?['status'] as String?)?.trim();
       if (status == null || status.isEmpty) return;
 
+      setState(() => _sessionStatus = status);
+      unawaited(_auditCall('session_status', extra: {'status': status}));
+
       if (status == 'accepted') {
+        _ringTimeoutTimer?.cancel();
+        _stopOutgoingRingtone();
+        _armConnectTimeout();
+        _startCallTimerIfNeeded();
         _remotePeerJoined = true;
         if (_isCaller && _localStream != null) {
           unawaited(_createAndSendOffer());
         }
+      } else if (status == 'ringing') {
+        if (_isCaller) {
+          _startOutgoingRingtone();
+        }
       } else if (status == 'rejected') {
+        _connectTimeoutTimer?.cancel();
+        _stopOutgoingRingtone();
+        unawaited(_cleanupSignalingRoomIfNeeded());
         _showBanner('La llamada fue rechazada', Colors.orangeAccent);
         Navigator.of(context).pop();
+      } else if (status == 'missed') {
+        _connectTimeoutTimer?.cancel();
+        _stopOutgoingRingtone();
+        unawaited(_cleanupSignalingRoomIfNeeded());
+        _showBanner('No contestaron la llamada', Colors.blueGrey);
+        Navigator.of(context).pop();
       } else if (status == 'ended') {
+        _connectTimeoutTimer?.cancel();
+        _stopOutgoingRingtone();
+        unawaited(_cleanupSignalingRoomIfNeeded());
         _showBanner('La llamada finalizó', Colors.blueGrey);
         Navigator.of(context).pop();
       }
     });
+  }
+
+  void _armConnectTimeout() {
+    _connectTimeoutTimer?.cancel();
+    _connectTimeoutTimer = Timer(const Duration(seconds: 45), () async {
+      if (!mounted || _stopwatch.isRunning) return;
+      if (mounted) {
+        setState(() {
+          _callRealtimeState = RealtimeUxState.timeout;
+          _callRealtimeMessage = 'Timeout de conexión. Reintentando...';
+        });
+      }
+      _logRtc('timeout: no se establecio conexion en 45s');
+      unawaited(_auditCall('connect_timeout'));
+      final callId = _callSessionId;
+      if (callId != null && callId.isNotEmpty) {
+        await CallSessionService.cancelExpiredRinging(callId);
+      }
+      if (!mounted) return; // lifecycle safety fix
+      await _cleanupSignalingRoomIfNeeded();
+      if (!mounted) return;
+      _showBanner('No se pudo establecer la llamada', Colors.orangeAccent);
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return; // lifecycle safety fix
+      Navigator.of(context).pop();
+    });
+  }
+
+  void _startOutgoingRingtone() {
+    if (!_isCaller || _ringtonePlaying) return;
+    _ringtonePlaying = true;
+    unawaited(() async {
+      if (!mounted) return; // lifecycle safety fix
+      try {
+        // Configurar AudioContext para Android: modo RINGTONE con usage NOTIFICATION_RINGTONE
+        // permite sonar aunque flutter_webrtc haya tomado el audio focus.
+        await _ringPlayer.setAudioContext(
+          AudioContext(
+            android: AudioContextAndroid(
+              audioMode: AndroidAudioMode.normal,
+              contentType: AndroidContentType.sonification,
+              usageType: AndroidUsageType.alarm,
+              audioFocus: AndroidAudioFocus.gainTransient,
+            ),
+            iOS: AudioContextIOS(
+              category: AVAudioSessionCategory.playback,
+              options: {
+                AVAudioSessionOptions.mixWithOthers,
+              },
+            ),
+          ),
+        );
+        await _ringPlayer.setReleaseMode(ReleaseMode.loop);
+        await _ringPlayer.setVolume(1.0);
+        await _ringPlayer.play(AssetSource('audio/outgoing_ring.wav'));
+      } catch (e) {
+        _ringtonePlaying = false;
+        debugPrint('Ringtone error: $e');
+        SystemSound.play(SystemSoundType.alert);
+      }
+    }());
+  }
+
+  Future<void> _stopOutgoingRingtone() async {
+    if (!_ringtonePlaying) return;
+    _ringtonePlaying = false;
+    try {
+      await _ringPlayer.stop();
+    } catch (_) {}
   }
 
   Future<void> _endSessionIfNeeded() async {
@@ -294,40 +900,250 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
       }
 
       await _initRenderers();
+      if (!mounted) return; // lifecycle safety fix
       _signaling.onMessage = _handleSignalingMessage;
+      _signaling.onConnectionChanged = (connected) {
+        _logRtc('signaling connectionChanged=$connected');
+      };
       _signaling.onError = (error) {
         if (!mounted) return;
         _showBanner(error, Colors.redAccent);
       };
       // Iniciar stream local ANTES de conectar señalización
       // para que el PeerConnection tenga tracks listos antes de procesar SDP.
+      final permissionsOk = await _ensureMediaPermissions();
+      if (!mounted) return; // lifecycle safety fix
+      if (!permissionsOk) {
+        unawaited(_auditCall('permissions_denied'));
+        _showBanner('Permisos de micrófono/cámara requeridos', Colors.redAccent,
+            persistent: true);
+        return;
+      }
+
       await _startLocalStream();
-      await _signaling.connect();
+      if (!mounted) return; // lifecycle safety fix
+
+      // Reintentar connect con backoff para zonas remotas/satélite
+      await _connectSignalingWithRetry();
+      _logRtc('signaling conectado room=$_roomId caller=$_isCaller');
+      unawaited(_auditCall('signaling_connected'));
     } catch (_) {
       if (!mounted) return;
+      unawaited(_auditCall('call_init_failed'));
       _showBanner('No se pudo iniciar la videollamada', Colors.redAccent,
           persistent: true, onRetry: _initCall);
     }
   }
 
+  Future<bool> _ensureMediaPermissions() async {
+    if (kIsWeb) return true;
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) return false;
+    if (widget.audioOnly) return true;
+    final cam = await Permission.camera.request();
+    return cam.isGranted;
+  }
+
+  Future<void> _loadRemoteUserSummary() async {
+    final remoteUid = widget.remoteUserId?.trim();
+    if (remoteUid == null || remoteUid.isEmpty) return;
+
+    String resolvedName = (_remoteDisplayName ?? '').trim();
+    String orbitNumber = (_remoteOrbitNumber ?? '').trim();
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users_public')
+          .doc(remoteUid)
+          .get();
+      final data = snap.data() ?? const <String, dynamic>{};
+      resolvedName =
+          ((data['fullName'] ?? data['displayName'] ?? resolvedName) as Object)
+              .toString()
+              .trim();
+      orbitNumber =
+          ((data['orbitNumber'] ?? orbitNumber) as Object).toString().trim();
+    } catch (_) {
+      // Se aplica fallback local abajo.
+    }
+
+    if (!mounted) return; // lifecycle safety fix
+
+    final currentUid = _localUserId?.trim();
+    if (currentUid != null && currentUid.isNotEmpty) {
+      try {
+        final localContact = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(currentUid)
+            .collection('contacts')
+            .doc(remoteUid)
+            .get();
+        final localData = localContact.data() ?? const <String, dynamic>{};
+        if (resolvedName.isEmpty) {
+          resolvedName =
+              ((localData['fullName'] ?? '') as Object).toString().trim();
+        }
+        if (orbitNumber.isEmpty) {
+          orbitNumber =
+              ((localData['orbitNumber'] ?? '') as Object).toString().trim();
+        }
+      } catch (_) {
+        // Si falla fallback local, conservamos valores previos.
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      if (resolvedName.isNotEmpty) {
+        _remoteDisplayName = resolvedName;
+      }
+      if (orbitNumber.isNotEmpty) {
+        _remoteOrbitNumber = orbitNumber;
+      }
+      if (_remoteDisplayName == null || _remoteDisplayName!.trim().isEmpty) {
+        _remoteDisplayName = 'Contacto Orbit';
+      }
+    });
+  }
+
+  String get _remoteTitle {
+    final resolved = (_remoteDisplayName ?? '').trim();
+    if (resolved.isNotEmpty) return resolved;
+    final orbit = (_remoteOrbitNumber ?? '').trim();
+    if (orbit.isNotEmpty) return 'OR-$orbit';
+    return 'Contacto Orbit';
+  }
+
+  Future<void> _saveRemoteContact() async {
+    final currentUid = _localUserId?.trim();
+    final remoteUid = widget.remoteUserId?.trim();
+    if (currentUid == null ||
+        currentUid.isEmpty ||
+        remoteUid == null ||
+        remoteUid.isEmpty) {
+      return;
+    }
+
+    if (currentUid == remoteUid) {
+      _showBanner('No puedes agregarte a ti mismo', Colors.orangeAccent);
+      return;
+    }
+
+    try {
+      final remoteSnap = await FirebaseFirestore.instance
+          .collection('users_public')
+          .doc(remoteUid)
+          .get();
+      final data = remoteSnap.data() ?? const <String, dynamic>{};
+      final contactName =
+          ((data['fullName'] ?? data['displayName'] ?? _remoteTitle) as Object)
+              .toString()
+              .trim();
+      final orbitNumber =
+          ((data['orbitNumber'] ?? _remoteOrbitNumber ?? '') as Object)
+              .toString()
+              .trim();
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUid)
+          .collection('contacts')
+          .doc(remoteUid)
+          .set({
+        'uid': remoteUid,
+        'orbitNumber': orbitNumber,
+        'fullName': contactName,
+        'email': '',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      _showBanner('Contacto guardado: $contactName', Colors.green);
+    } catch (_) {
+      if (!mounted) return;
+      _showBanner('No se pudo guardar el contacto', Colors.redAccent);
+    }
+  }
+
+  Future<void> _shareCallInvite() async {
+    final remoteUid = (widget.remoteUserId ?? '').trim();
+    final callType = widget.audioOnly ? 'voz' : 'video';
+    final inviteLines = <String>[
+      'Invitación a llamada Orbit',
+      'Tipo: $callType',
+      'Sala: $_roomId',
+      if (_callSessionId != null && _callSessionId!.trim().isNotEmpty)
+        'Sesión: ${_callSessionId!.trim()}',
+      if (_remoteTitle.isNotEmpty) 'En llamada con: $_remoteTitle',
+      if (remoteUid.isNotEmpty) 'UID remoto: $remoteUid',
+      '',
+      'Comparte estos datos solo con usuarios autorizados de Orbit.',
+    ];
+
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          text: inviteLines.join('\n'),
+          subject: 'Invitación a llamada Orbit',
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      _showBanner('No se pudo compartir la invitación', Colors.redAccent);
+    }
+  }
+
+  Future<void> _connectSignalingWithRetry() async {
+    int attempts = 0;
+    const maxAttempts = 5;
+
+    while (attempts < maxAttempts) {
+      try {
+        await _signaling.connect();
+        return; // Éxito
+      } catch (e) {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          rethrow;
+        }
+
+        // Backoff exponencial: 500ms, 1s, 2s, 4s, 8s
+        final delayMs = 500 * (1 << (attempts - 1));
+        if (mounted) {
+          _showBanner(
+            'Reintentando conexión... (intento $attempts/$maxAttempts)',
+            Colors.orange,
+          );
+        }
+        await Future.delayed(Duration(milliseconds: delayMs));
+      }
+    }
+  }
+
   Future<void> _startLocalStream() async {
+    final profile = _adaptiveProfile;
     final mediaConstraints = {
       'audio': true,
       'video': widget.audioOnly
           ? false
           : {
               'facingMode': 'user',
-              'width': 640,
-              'height': 480,
+              'width': profile.maxWidth,
+              'height': profile.maxHeight,
+              'frameRate': profile.maxFps,
             },
     };
     try {
+      _logRtc('getUserMedia constraints=$mediaConstraints');
       _localStream =
           await navigator.mediaDevices.getUserMedia(mediaConstraints);
+      unawaited(_auditCall('local_media_started'));
       _localRenderer.srcObject = _localStream;
       await _createPeerConnection();
       for (final track in _localStream!.getTracks()) {
         await _peerConnection?.addTrack(track, _localStream!);
+        _logRtc('addTrack kind=${track.kind} enabled=${track.enabled}');
       }
 
       // Solo el iniciador envía oferta y la reintenta cuando el otro peer entra.
@@ -335,96 +1151,658 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         await _createAndSendOffer();
       }
     } catch (e) {
+      _logRtc('error getUserMedia/addTrack: $e');
+      unawaited(_auditCall('media_start_failed', extra: {'error': '$e'}));
       _showBanner('Error al iniciar cámara/micrófono', Colors.redAccent,
           persistent: true, onRetry: _startLocalStream);
     }
   }
 
   Future<void> _createPeerConnection() async {
-    final iceServers = <Map<String, dynamic>>[
-      {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
-    ];
-
-    if (turnServerUrl.trim().isNotEmpty) {
-      iceServers.add({
-        'urls': turnServerUrl,
-        if (turnServerUsername.trim().isNotEmpty)
-          'username': turnServerUsername,
-        if (turnServerCredential.trim().isNotEmpty)
-          'credential': turnServerCredential,
-      });
-    }
+    // ========== PHASE 2: TURN/STUN CONFIGURATION ==========
+    // Use TurnStunConfig to build ICE servers with fallbacks
+    final iceServers = TurnStunConfig.buildIceServers(
+      includeTestServers: !kReleaseMode,
+    );
 
     final config = {
       'iceServers': iceServers,
       'sdpSemantics': 'unified-plan',
+      'bundlePolicy': 'max-bundle',
+      'rtcpMuxPolicy': 'require',
+      'tcpCandidatePolicy': 'disabled',
+      'continualGatheringPolicy': 'gather_once',
+      'iceCandidatePoolSize': 0,
     };
+    _logRtc('createPeerConnection iceServers=${iceServers.length}');
     _peerConnection = await createPeerConnection(config);
+    if (!mounted) return; // lifecycle safety fix
+    if (mounted) {
+      setState(() {
+        _iceStatus = _shortEnumValue(_peerConnection!.iceConnectionState);
+        _pcStatus = _shortEnumValue(_peerConnection!.connectionState);
+        _signalStatus = _shortEnumValue(_peerConnection!.signalingState);
+      });
+    }
     _peerConnection?.onTrack = (RTCTrackEvent event) {
+      if (!mounted) return; // lifecycle safety fix
       if (event.streams.isNotEmpty) {
+        _logRtc(
+            'onTrack kind=${event.track.kind} streams=${event.streams.length}');
         setState(() {
           _remoteRenderer.srcObject = event.streams[0];
         });
       }
     };
     _peerConnection?.onIceCandidate = (candidate) {
+      if (candidate.candidate == null || candidate.candidate!.isEmpty) {
+        _logRtc('onIceCandidate end-of-candidates');
+        return;
+      }
+      final pathType = _candidatePathType(candidate.candidate);
+      if (mounted) {
+        setState(() {
+          if (pathType.isNotEmpty) {
+            _localPathType = pathType;
+          }
+          _localCandidateCount++;
+        });
+      }
+      _logRtc(
+          'onIceCandidate local #$_localCandidateCount type=$pathType mid=${candidate.sdpMid} line=${candidate.sdpMLineIndex}');
       _signaling.send({
         'type': 'candidate',
         'candidate': candidate.toMap(),
       }).catchError((_) {});
     };
+
+    // ── ICE connection state: detecta cortes y lanza ICE restart automático ──
+    _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
+      if (!mounted) return;
+      _logRtc('iceConnectionState=${_shortEnumValue(state)}');
+      setState(() => _iceStatus = _shortEnumValue(state));
+      switch (state) {
+        case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
+          setState(() {
+            _callRealtimeState = RealtimeUxState.reconnecting;
+            _callRealtimeMessage = 'Conexión inestable. Reconectando...';
+          });
+          _showBanner('Conexión inestable, reconectando...', Colors.orange);
+          _requestIceRecovery(
+            reason: 'ice_disconnected',
+            trigger: 'ice_state_disconnected',
+          );
+          break;
+        case RTCIceConnectionState.RTCIceConnectionStateFailed:
+          setState(() {
+            _callRealtimeState = RealtimeUxState.reconnecting;
+            _callRealtimeMessage = 'Conexión perdida. Reiniciando enlace...';
+          });
+          unawaited(_auditCall('ice_failed'));
+          _showBanner('Conexión perdida, reiniciando ICE...', Colors.orange);
+          _requestIceRecovery(
+            reason: 'ice_failed',
+            trigger: 'ice_state_failed',
+          );
+          break;
+        case RTCIceConnectionState.RTCIceConnectionStateConnected:
+        case RTCIceConnectionState.RTCIceConnectionStateCompleted:
+          setState(() {
+            _callRealtimeState = RealtimeUxState.online;
+            _callRealtimeMessage = 'Llamada conectada';
+          });
+          _markIceRecovered();
+          _connectTimeoutTimer?.cancel();
+          unawaited(_auditCall('ice_connected'));
+          _startCallTimerIfNeeded();
+          if (mounted) _showBanner('Conectado', Colors.green);
+          break;
+        case RTCIceConnectionState.RTCIceConnectionStateClosed:
+          _cancelIceRestartTimer();
+          _iceRecoveryTimeoutTimer?.cancel();
+          break;
+        default:
+          break;
+      }
+    };
+
+    // ── Connection state: segunda línea de defensa ──
+    _peerConnection?.onConnectionState = (RTCPeerConnectionState state) {
+      if (!mounted) return;
+      _logRtc('connectionState=${_shortEnumValue(state)}');
+      setState(() => _pcStatus = _shortEnumValue(state));
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        setState(() {
+          _callRealtimeState = RealtimeUxState.online;
+          _callRealtimeMessage = 'Llamada estable';
+        });
+        _connectTimeoutTimer?.cancel();
+        _markIceRecovered();
+        unawaited(_auditCall('peer_connected'));
+        _startCallTimerIfNeeded();
+      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        setState(() {
+          _callRealtimeState = RealtimeUxState.reconnecting;
+          _callRealtimeMessage =
+              'Error de conexión. Intentando recuperar llamada...';
+        });
+        unawaited(_auditCall('peer_failed'));
+        _requestIceRecovery(
+          reason: 'pc_failed',
+          trigger: 'pc_state_failed',
+        );
+      }
+    };
+
+    _peerConnection?.onSignalingState = (RTCSignalingState state) {
+      if (!mounted) return;
+      _logRtc('signalingState=${_shortEnumValue(state)}');
+      setState(() => _signalStatus = _shortEnumValue(state));
+    };
+    _startIceHeartbeat();
+  }
+
+  void _startCallTimerIfNeeded() {
+    if (_stopwatch.isRunning) return;
+    _stopOutgoingRingtone();
+    _stopwatch.start();
+    if (mounted) {
+      setState(() {
+        _callDuration = '00:00';
+      });
+    }
+  }
+
+  void _requestIceRecovery({
+    required String reason,
+    required String trigger,
+    bool remoteRequest = false,
+  }) {
+    final now = DateTime.now();
+    if (!_consumeStormBudget(now)) {
+      _logRtc(
+          '🛡️ storm protection activated; trigger=$trigger reason=$reason');
+      _showBanner(
+        'Protección anti-tormenta activa, estabilizando reconexión...',
+        Colors.orange,
+      );
+      return;
+    }
+
+    if (!remoteRequest) {
+      final last = _lastRecoveryTriggerAt;
+      if (last != null && now.difference(last).inMilliseconds < 1200) {
+        _logRtc('skip duplicate recovery trigger=$trigger reason=$reason');
+        return;
+      }
+    }
+
+    _lastRecoveryTriggerAt = now;
+    _iceRecoveryInProgress = true;
+    _armIceRecoveryTimeout(reason: reason, remoteRequest: remoteRequest);
+
+    if (!_isCaller && !remoteRequest) {
+      unawaited(_sendRestartIceSignal(reason: reason, trigger: trigger));
+      _logRtc(
+          'callee requested remote ICE restart first (reason=$reason trigger=$trigger)');
+      return;
+    }
+
+    _scheduleIceRestart(remoteRequest: remoteRequest, reason: reason);
+  }
+
+  void _scheduleIceRestart({
+    required bool remoteRequest,
+    required String reason,
+  }) {
+    if (_iceReconnectAttempts >= _maxIceReconnectAttempts) {
+      _logRtc(
+          '⚠️ ICE reconnect max attempts ($_iceReconnectAttempts/$_maxIceReconnectAttempts) reached.');
+      _showBanner(
+        'Conexión perdida permanentemente. Terminar llamada.',
+        Colors.red,
+        persistent: true,
+      );
+      return;
+    }
+
+    _iceRestartTimer?.cancel();
+    final baseDelayMs = (_minIceReconnectDelayMs * (1 << _iceReconnectAttempts))
+        .clamp(_minIceReconnectDelayMs, _maxIceReconnectDelayMs);
+    final jitterFactor = 0.75 + (_random.nextDouble() * 0.5);
+    final finalDelayMs = (baseDelayMs * jitterFactor).round();
+    _logRtc(
+        '⏱️ ICE reconnect attempt ${_iceReconnectAttempts + 1}/$_maxIceReconnectAttempts in ${finalDelayMs}ms (base=${baseDelayMs}ms jitter=${jitterFactor.toStringAsFixed(2)} reason=$reason remoteRequest=$remoteRequest)');
+
+    _iceRestartTimer = Timer(Duration(milliseconds: finalDelayMs), () {
+      _iceReconnectAttempts++;
+      unawaited(
+        _doIceRestart(
+          remoteRequest: remoteRequest,
+          reason: reason,
+        ),
+      );
+    });
+  }
+
+  void _cancelIceRestartTimer() {
+    _iceRestartTimer?.cancel();
+    _iceRestartTimer = null;
+  }
+
+  void _markIceRecovered() {
+    _cancelIceRestartTimer();
+    _iceRecoveryTimeoutTimer?.cancel();
+    _iceRecoveryInProgress = false;
+    _iceReconnectAttempts = 0;
+    _heartbeatUnhealthyTicks = 0;
+  }
+
+  void _armIceRecoveryTimeout({
+    required String reason,
+    required bool remoteRequest,
+  }) {
+    _iceRecoveryTimeoutTimer?.cancel();
+    _iceRecoveryTimeoutTimer = Timer(_iceRecoveryTimeout, () {
+      if (!mounted) return;
+      final iceState = _peerConnection?.iceConnectionState;
+      final healthy =
+          iceState == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+              iceState == RTCIceConnectionState.RTCIceConnectionStateCompleted;
+      if (healthy) return;
+
+      _logRtc(
+          '⏱️ ICE recovery timeout reason=$reason remoteRequest=$remoteRequest');
+      _showBanner('Reintento inteligente de conexión...', Colors.orange);
+      if (!_isCaller && !remoteRequest) {
+        // Escalación: si el caller no reaccionó al restartIce, el callee también
+        // puede forzar ICE restart para recuperar la llamada.
+        _scheduleIceRestart(remoteRequest: true, reason: 'timeout_escalation');
+        return;
+      }
+      _scheduleIceRestart(
+        remoteRequest: remoteRequest,
+        reason: 'timeout_retry',
+      );
+    });
+  }
+
+  void _startIceHeartbeat() {
+    _iceHeartbeatTimer?.cancel();
+    _iceHeartbeatTimer = Timer.periodic(_iceHeartbeatInterval, (_) {
+      if (!mounted || _peerConnection == null) return;
+      final iceState = _peerConnection!.iceConnectionState;
+      final healthy =
+          iceState == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+              iceState == RTCIceConnectionState.RTCIceConnectionStateCompleted;
+      if (healthy) {
+        if (_heartbeatUnhealthyTicks > 0) {
+          _logRtc(
+              'heartbeat: ICE recovered state=${_shortEnumValue(iceState)}');
+        }
+        _heartbeatUnhealthyTicks = 0;
+        return;
+      }
+
+      _heartbeatUnhealthyTicks++;
+      _logRtc(
+          'heartbeat: unhealthy tick=$_heartbeatUnhealthyTicks state=${_shortEnumValue(iceState)} inProgress=$_iceRecoveryInProgress');
+      if (_heartbeatUnhealthyTicks >= _heartbeatUnhealthyThreshold &&
+          !_iceRecoveryInProgress) {
+        _requestIceRecovery(
+          reason: 'heartbeat_unhealthy',
+          trigger: 'heartbeat',
+        );
+      }
+    });
+  }
+
+  bool _consumeStormBudget(DateTime now) {
+    if (now.difference(_restartStormWindowStart) > const Duration(minutes: 1)) {
+      _restartStormWindowStart = now;
+      _restartStormCount = 0;
+    }
+    if (_restartStormCount >= _maxReconnectStormPerMinute) {
+      return false;
+    }
+    _restartStormCount++;
+    return true;
+  }
+
+  Future<void> _sendRestartIceSignal({
+    required String reason,
+    required String trigger,
+  }) async {
+    final now = DateTime.now();
+    final last = _lastRestartSignalAt;
+    if (last != null && now.difference(last) < _restartSignalCooldown) {
+      _logRtc(
+          'restartIce signal cooldown active; trigger=$trigger reason=$reason');
+      return;
+    }
+    _lastRestartSignalAt = now;
+    final requestId =
+        '${_isCaller ? 'caller' : 'callee'}_${now.microsecondsSinceEpoch}_${_random.nextInt(1 << 20)}';
+    _handledRestartRequestIds.add(requestId);
+    _logRtc(
+        '📡 send restartIce requestId=$requestId trigger=$trigger reason=$reason');
+    await _signaling.send({
+      'type': 'restartIce',
+      'requestId': requestId,
+      'from': _localUserId,
+      'reason': reason,
+    });
+  }
+
+  Future<void> _doIceRestart({
+    bool remoteRequest = false,
+    required String reason,
+  }) async {
+    _cancelIceRestartTimer();
+    if (_peerConnection == null) {
+      _logRtc('⚠️ ICE restart skipped: no peer connection');
+      return;
+    }
+    // Si es callee y no es remoteRequest, señaliza al peer para que reinicie
+    if (!_isCaller && !remoteRequest) {
+      await _sendRestartIceSignal(
+        reason: reason,
+        trigger: 'do_ice_restart_callee',
+      );
+      return;
+    }
+    try {
+      _logRtc(
+          '🔄 ICE restart attempt $_iceReconnectAttempts/$_maxIceReconnectAttempts: createOffer (isCaller=$_isCaller, remoteRequest=$remoteRequest, reason=$reason)');
+      final offer = await _peerConnection!.createOffer({'iceRestart': true});
+      if (offer.sdp == null || offer.sdp!.isEmpty) {
+        throw Exception('Invalid offer SDP');
+      }
+      final optimizedSdp = WebRTCService.optimizeSdpForMobileEfficiency(
+        offer.sdp!,
+        maxVideoBitrateKbps: _adaptiveProfile.targetBitrateKbps,
+        preferH264: true,
+      );
+      final optimizedOffer = RTCSessionDescription(optimizedSdp, 'offer');
+      await _peerConnection!.setLocalDescription(optimizedOffer);
+      _logRtc('✅ ICE restart localDescription set');
+      await _signaling.send({
+        'type': 'offer',
+        'sdp': optimizedSdp,
+      }).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw TimeoutException('Signaling send timeout'),
+      );
+      _logRtc('✅ ICE restart offer sent');
+    } on TimeoutException catch (_) {
+      _logRtc('⏱️ ICE restart timeout, scheduling retry...');
+      _showBanner('Reintentando conexión (timeout)...', Colors.orange);
+      if (_iceReconnectAttempts < _maxIceReconnectAttempts) {
+        _scheduleIceRestart(
+          remoteRequest: remoteRequest,
+          reason: 'send_timeout',
+        );
+      }
+    } catch (e) {
+      _logRtc('❌ ICE restart failed: $e');
+      _showBanner(
+          'No se pudo reiniciar la conexión, reintentando...', Colors.orange);
+      if (_iceReconnectAttempts < _maxIceReconnectAttempts) {
+        _scheduleIceRestart(
+          remoteRequest: remoteRequest,
+          reason: 'restart_failed',
+        );
+      } else {
+        _showBanner('Conexión perdida permanentemente', Colors.red,
+            persistent: true);
+      }
+    }
   }
 
   Future<void> _createAndSendOffer() async {
     if (!_isCaller || _offerSent) return;
     _offerSent = true;
     if (_peerConnection == null) await _createPeerConnection();
+    _logRtc('createOffer');
     final offer = await _peerConnection?.createOffer();
     if (offer == null) return;
-    await _peerConnection?.setLocalDescription(offer);
+    final rawSdp = offer.sdp;
+    if (rawSdp == null || rawSdp.isEmpty) return;
+    final optimizedSdp = WebRTCService.optimizeSdpForMobileEfficiency(
+      rawSdp,
+      maxVideoBitrateKbps: _adaptiveProfile.targetBitrateKbps,
+      preferH264: true,
+    );
+    final optimizedOffer = RTCSessionDescription(optimizedSdp, 'offer');
+    await _peerConnection?.setLocalDescription(optimizedOffer);
+    _logRtc(
+        'setLocalDescription offer ok sdpLen=${optimizedSdp.length} bitrate=${_adaptiveProfile.targetBitrateKbps}kbps res=${_adaptiveProfile.maxWidth}x${_adaptiveProfile.maxHeight} fps=${_adaptiveProfile.maxFps}');
     await _signaling.send({
       'type': 'offer',
-      'sdp': offer.sdp,
+      'sdp': optimizedSdp,
       if (widget.remoteUserId != null) 'to': widget.remoteUserId,
       if (_localUserId != null) 'from': _localUserId,
     });
+    _logRtc('offer enviado');
+    unawaited(_auditCall('offer_sent'));
   }
 
   void _handleSignalingMessage(Map<String, dynamic> msg) async {
+    if (!mounted) return; // lifecycle safety fix
     switch (msg['type']) {
       case 'joined':
       case 'peer-joined':
+        _logRtc('peer-joined recibido');
         _remotePeerJoined = true;
         if (_isCaller && _localStream != null) {
           await _createAndSendOffer();
         }
         break;
       case 'offer':
+        _logRtc(
+            'offer recibido sdpLen=${(msg['sdp'] ?? '').toString().length}');
         if (_peerConnection == null) await _createPeerConnection();
         await _peerConnection
             ?.setRemoteDescription(RTCSessionDescription(msg['sdp'], 'offer'));
+        _remoteDescriptionSet = true;
+        await _flushPendingRemoteCandidates();
+        _logRtc('setRemoteDescription offer ok');
         final answer = await _peerConnection?.createAnswer();
         if (answer != null) {
-          await _peerConnection?.setLocalDescription(answer);
+          final rawSdp = answer.sdp;
+          if (rawSdp == null || rawSdp.isEmpty) break;
+          final optimizedSdp = WebRTCService.optimizeSdpForMobileEfficiency(
+            rawSdp,
+            maxVideoBitrateKbps: _adaptiveProfile.targetBitrateKbps,
+            preferH264: true,
+          );
+          final optimizedAnswer = RTCSessionDescription(optimizedSdp, 'answer');
+          await _peerConnection?.setLocalDescription(optimizedAnswer);
+          _logRtc(
+              'setLocalDescription answer ok sdpLen=${optimizedSdp.length} bitrate=${_adaptiveProfile.targetBitrateKbps}kbps res=${_adaptiveProfile.maxWidth}x${_adaptiveProfile.maxHeight} fps=${_adaptiveProfile.maxFps}');
           await _signaling.send({
             'type': 'answer',
-            'sdp': answer.sdp,
+            'sdp': optimizedSdp,
             if (widget.remoteUserId != null) 'to': widget.remoteUserId,
             if (_localUserId != null) 'from': _localUserId,
           });
+          _logRtc('answer enviado');
+          unawaited(_auditCall('answer_sent'));
         }
         break;
       case 'answer':
+        _logRtc(
+            'answer recibido sdpLen=${(msg['sdp'] ?? '').toString().length}');
         await _peerConnection
             ?.setRemoteDescription(RTCSessionDescription(msg['sdp'], 'answer'));
+        _remoteDescriptionSet = true;
+        await _flushPendingRemoteCandidates();
+        _logRtc('setRemoteDescription answer ok');
+        unawaited(_auditCall('answer_received'));
         break;
       case 'candidate':
         final cand = msg['candidate'];
-        await _peerConnection?.addCandidate(RTCIceCandidate(
-            cand['candidate'], cand['sdpMid'], cand['sdpMLineIndex']));
+        if (cand is! Map) {
+          _logRtc('candidate inválido ignorado');
+          return;
+        }
+        final candidateValue = (cand['candidate'] ?? '').toString();
+        if (candidateValue.isEmpty) {
+          _logRtc('candidate vacío ignorado');
+          return;
+        }
+        final remoteCandidate = (cand['candidate'] ?? '').toString();
+        final remotePathType = _candidatePathType(remoteCandidate);
+        if (mounted) {
+          setState(() {
+            if (remotePathType.isNotEmpty) {
+              _remotePathType = remotePathType;
+            }
+            _remoteCandidateCount++;
+          });
+        }
+        final sdpMid = cand['sdpMid']?.toString();
+        final lineIndexRaw = cand['sdpMLineIndex'];
+        final sdpMLineIndex = lineIndexRaw is num
+            ? lineIndexRaw.toInt()
+            : int.tryParse('$lineIndexRaw');
+        final rtcCandidate = RTCIceCandidate(
+          candidateValue,
+          sdpMid,
+          sdpMLineIndex,
+        );
+        _logRtc(
+            'candidate remoto #$_remoteCandidateCount type=$remotePathType mid=$sdpMid line=$sdpMLineIndex');
+        await _addOrBufferRemoteCandidate(rtcCandidate);
+        break;
+      case 'restartIce':
+        final requestId = (msg['requestId'] as String?)?.trim();
+        if (requestId != null && requestId.isNotEmpty) {
+          if (_handledRestartRequestIds.contains(requestId)) {
+            _logRtc('restartIce duplicado ignorado requestId=$requestId');
+            return;
+          }
+          _handledRestartRequestIds.add(requestId);
+        }
+        final reason = (msg['reason'] as String?)?.trim() ?? 'remote_request';
+        final from = (msg['from'] as String?)?.trim();
+        _logRtc(
+            'restartIce recibido requestId=$requestId from=$from reason=$reason');
+        _requestIceRecovery(
+          reason: reason,
+          trigger: 'remote_restart_signal',
+          remoteRequest: true,
+        );
         break;
     }
+  }
+
+  Future<void> _addOrBufferRemoteCandidate(RTCIceCandidate candidate) async {
+    if (_peerConnection == null || !_remoteDescriptionSet) {
+      // STABILIZATION: Limit ICE buffer to prevent memory exhaustion
+      if (_pendingRemoteCandidates.length >= _maxPendingIceCandidates) {
+        _logRtc(
+            '⚠️ ICE buffer FULL (${_pendingRemoteCandidates.length}/$_maxPendingIceCandidates). Dropping oldest candidate.');
+        _pendingRemoteCandidates.removeAt(0); // Remove oldest (FIFO drop)
+      }
+      _pendingRemoteCandidates.add(candidate);
+      _logRtc(
+          'candidate remoto en buffer (total=${_pendingRemoteCandidates.length}/$_maxPendingIceCandidates)');
+      return;
+    }
+
+    try {
+      await _peerConnection!.addCandidate(candidate);
+      _logRtc('addCandidate remoto aplicado');
+    } catch (e) {
+      _logRtc('error addCandidate remoto: $e');
+    }
+  }
+
+  Future<void> _flushPendingRemoteCandidates() async {
+    if (_peerConnection == null || !_remoteDescriptionSet) return;
+    if (_pendingRemoteCandidates.isEmpty) return;
+
+    final buffered = List<RTCIceCandidate>.from(_pendingRemoteCandidates);
+    _pendingRemoteCandidates.clear();
+    _logRtc('flush ${buffered.length} candidatos remotos pendientes');
+
+    for (final cand in buffered) {
+      try {
+        await _peerConnection!.addCandidate(cand);
+      } catch (e) {
+        _logRtc('error addCandidate buffered: $e');
+      }
+    }
+  }
+
+  void _logRtc(String message) {
+    debugPrint('[WebRTC][room=$_roomId][caller=$_isCaller] $message');
+  }
+
+  Future<void> _auditCall(String eventType,
+      {Map<String, Object?> extra = const <String, Object?>{}}) async {
+    try {
+      await CallDiagnosticsService.logEvent(
+        eventType: eventType,
+        callSessionId: _callSessionId,
+        roomId: _roomId,
+        peerUserId: widget.remoteUserId,
+        extra: {
+          'isCaller': _isCaller,
+          'audioOnly': widget.audioOnly,
+          'sessionStatus': _sessionStatus,
+          'iceStatus': _iceStatus,
+          'pcStatus': _pcStatus,
+          'signalStatus': _signalStatus,
+          'localCandidates': _localCandidateCount,
+          'remoteCandidates': _remoteCandidateCount,
+          'adaptiveTier': _adaptiveProfile.pauseVideo
+              ? 'critical'
+              : (_adaptiveProfile.batterySaver ? 'saver' : 'high'),
+          'adaptiveWidth': _adaptiveProfile.maxWidth,
+          'adaptiveHeight': _adaptiveProfile.maxHeight,
+          'adaptiveFps': _adaptiveProfile.maxFps,
+          'adaptiveTargetBitrateKbps': _adaptiveProfile.targetBitrateKbps,
+          'adaptiveMinBitrateKbps': _adaptiveProfile.minBitrateKbps,
+          'adaptivePauseVideo': _adaptiveProfile.pauseVideo,
+          'adaptiveBatterySaver': _adaptiveProfile.batterySaver,
+          'adaptiveThermalLevel': _adaptiveProfile.thermalLevel.name,
+          'thermalLevelUi': _thermalLevel.name,
+          'batterySaverModeUi': _batterySaverMode,
+          ...extra,
+        },
+      );
+    } catch (e) {
+      debugPrint('[WebRTC][audit] $e');
+    }
+  }
+
+  Future<void> _cleanupSignalingRoomIfNeeded() async {
+    if (_roomCleanupStarted) return;
+    _roomCleanupStarted = true;
+    try {
+      await _signaling.cleanupRoom();
+      await _auditCall('signaling_room_cleaned');
+    } catch (e) {
+      _roomCleanupStarted = false;
+      debugPrint('[WebRTC][cleanup] $e');
+    }
+  }
+
+  String _shortEnumValue(Object? value) {
+    if (value == null) return 'n/d';
+    final raw = value.toString();
+    final idx = raw.lastIndexOf('.');
+    return idx == -1 ? raw : raw.substring(idx + 1);
+  }
+
+  String _candidatePathType(String? candidate) {
+    final c = (candidate ?? '').toLowerCase();
+    if (c.contains(' typ relay')) return 'relay';
+    if (c.contains(' typ srflx')) return 'srflx';
+    if (c.contains(' typ host')) return 'host';
+    return '';
   }
 
   void _toggleMic() {
@@ -444,55 +1822,40 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     }
   }
 
-  void _toggleSpeaker() {
-    // flutter_webrtc maneja el altavoz en dispositivos móviles con setSpeakerphoneOn
-    Helper.setSpeakerphoneOn(speakerOn);
+  Future<void> _configureAudioRouting() async {
+    try {
+      await Helper.setSpeakerphoneOn(speakerOn);
+    } catch (_) {}
   }
 
-  MaterialBanner? _activeBanner;
+  void _toggleSpeaker() {
+    // flutter_webrtc maneja el altavoz en dispositivos móviles con setSpeakerphoneOn
+    unawaited(_configureAudioRouting());
+  }
 
   void _showBanner(String message, Color color,
       {bool persistent = false, VoidCallback? onRetry}) {
+    if (!mounted) return; // lifecycle safety fix
+    final state = color == Colors.green
+        ? RealtimeUxState.online
+        : (color == Colors.red || color == Colors.redAccent)
+            ? RealtimeUxState.error
+            : (color == Colors.orange || color == Colors.orangeAccent)
+                ? RealtimeUxState.reconnecting
+                : RealtimeUxState.queued;
     setState(() {
-      _activeBanner = MaterialBanner(
-        content: Text(message, style: const TextStyle(color: Colors.white)),
-        backgroundColor: color,
-        actions: [
-          if (onRetry != null)
-            TextButton(
-              child: const Text('Reintentar',
-                  style: TextStyle(color: Colors.white)),
-              onPressed: () {
-                HapticFeedback.selectionClick();
-                setState(() {
-                  _activeBanner = null;
-                });
-                onRetry();
-              },
-            ),
-          TextButton(
-            child: const Text('Cerrar', style: TextStyle(color: Colors.white)),
-            onPressed: () {
-              HapticFeedback.selectionClick();
-              setState(() {
-                _activeBanner = null;
-              });
-            },
-          ),
-        ],
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
-        elevation: 2,
-      );
+      _callRealtimeState = state;
+      _callRealtimeMessage = message;
     });
-    if (!persistent) {
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) {
-          setState(() {
-            _activeBanner = null;
-          });
-        }
-      });
-    }
+    ErrorPresenter.showSnack(
+      context,
+      message,
+      state: state,
+      actionLabel: onRetry != null ? 'Reintentar' : null,
+      onAction: onRetry,
+      duration:
+          persistent ? const Duration(seconds: 6) : const Duration(seconds: 3),
+    );
   }
 
   bool micOn = true;
@@ -501,19 +1864,13 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final hasRemoteVideo = !widget.audioOnly;
+    final hasRemoteVideo = _videoEnabled && !widget.audioOnly;
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFFF4F8FC),
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
-          if (_activeBanner != null)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: _activeBanner!,
-            ),
           Container(
             color: Colors.black,
             child: Center(
@@ -533,7 +1890,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   const SizedBox(height: 12),
                   if (widget.remoteUserId != null)
                     Text(
-                      'Conectando con ${widget.remoteUserId}',
+                      'Conectando con $_remoteTitle',
                       style: const TextStyle(color: Colors.white70),
                     ),
                   if (_peerConnection != null)
@@ -541,17 +1898,36 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                       padding: const EdgeInsets.only(top: 12),
                       child: Semantics(
                         label: 'Duración de la llamada',
-                        child: Text('⏱ $_callDuration',
+                        child: Text(
+                            _stopwatch.isRunning
+                                ? '⏱ $_callDuration'
+                                : (_isCaller
+                                    ? 'Llamando...'
+                                    : 'Esperando conexión...'),
                             style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold)),
                       ),
                     ),
+                  // Botón para alternar video
+                  Padding(
+                    padding: const EdgeInsets.only(top: 24.0),
+                    child: IconButton(
+                      icon: Icon(
+                          _videoEnabled ? Icons.videocam : Icons.videocam_off,
+                          color: Colors.white,
+                          size: 36),
+                      onPressed: _toggleVideo,
+                      tooltip:
+                          _videoEnabled ? 'Desactivar video' : 'Activar video',
+                    ),
+                  ),
                 ],
               ),
             ),
           ),
+          // ...resto de la UI (barras, controles, etc.)
           Positioned(
             top: 16,
             left: 12,
@@ -562,9 +1938,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
-                  color: Colors.black.withAlpha(95),
+                  color: Colors.white.withAlpha(232),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF2B4461)),
+                  border: Border.all(color: const Color(0xFFD8E3EF)),
                 ),
                 child: Row(
                   children: [
@@ -588,23 +1964,91 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        widget.remoteUserId ?? 'Llamada Orbit',
+                        _remoteTitle,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: Colors.white,
+                          color: Color(0xFF16324F),
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
+                    if (_videoDegraded)
+                      Container(
+                        margin: const EdgeInsets.only(right: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withAlpha(24),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: Colors.orange),
+                        ),
+                        child: const Text(
+                          'Video degradado',
+                          style: TextStyle(
+                            color: Colors.orange,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                     Text(
-                      _callDuration,
-                      style: const TextStyle(color: Colors.white70),
+                      _stopwatch.isRunning
+                          ? _callDuration
+                          : (_isCaller ? 'Timbrando' : 'Conectando'),
+                      style: const TextStyle(color: Color(0xFF6D7F92)),
                     ),
                   ],
                 ),
               ),
             ),
           ),
+          Positioned(
+            top: 74,
+            left: 12,
+            right: 12,
+            child: SafeArea(
+              bottom: false,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: ErrorPresenter.buildStatusStrip(
+                  state: _callRealtimeState,
+                  message: _callRealtimeMessage,
+                  onRetry: () {
+                    _requestIceRecovery(
+                      reason: 'manual_retry',
+                      trigger: 'user_retry',
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+          if (kDebugMode)
+            Positioned(
+              top: 126,
+              left: 12,
+              right: 12,
+              child: SafeArea(
+                bottom: false,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withAlpha(170),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF3B4E62)),
+                  ),
+                  child: Text(
+                    'diag session=$_sessionStatus  ice=$_iceStatus  pc=$_pcStatus  sig=$_signalStatus  net=${_networkQuality.name}  local=$_localPathType($_localCandidateCount)  remote=$_remotePathType($_remoteCandidateCount)',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
+              ),
+            ),
           if (hasRemoteVideo)
             Positioned(
               top: 40,
@@ -615,7 +2059,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                 decoration: BoxDecoration(
                   color: Colors.white10,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF3A5A7B)),
+                  border: Border.all(color: Colors.white),
                 ),
                 child: RTCVideoView(_localRenderer,
                     mirror: true,
@@ -635,9 +2079,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                   decoration: BoxDecoration(
-                    color: Colors.black.withAlpha(115),
+                    color: Colors.white.withAlpha(232),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFF2E4865)),
+                    border: Border.all(color: const Color(0xFFD8E3EF)),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -683,9 +2127,11 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                               },
                             ),
                           _controlButton(
-                            icon:
-                                speakerOn ? Icons.volume_up : Icons.volume_off,
+                            icon: speakerOn
+                                ? Icons.speaker_phone
+                                : Icons.speaker_phone_outlined,
                             color: speakerOn ? Colors.white : Colors.red,
+                            label: 'Altavoz',
                             semanticLabel: speakerOn
                                 ? 'Altavoz activado'
                                 : 'Altavoz desactivado',
@@ -719,7 +2165,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                               _controlsExpanded
                                   ? Icons.keyboard_arrow_down
                                   : Icons.keyboard_arrow_up,
-                              color: Colors.white70,
+                              color: const Color(0xFF6D7F92),
                             ),
                           ),
                         ],
@@ -733,45 +2179,22 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                               _controlButton(
                                 icon: Icons.person_add,
                                 color: Colors.white,
-                                semanticLabel: 'Añadir contacto a llamada',
+                                label: 'Contacto',
+                                semanticLabel: 'Guardar contacto',
                                 onTap: () {
                                   HapticFeedback.selectionClick();
-                                  showDialog(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: const Text('Añadir contacto'),
-                                      content: const Text(
-                                          'Funcionalidad para añadir contacto a la llamada.'),
-                                      actions: [
-                                        TextButton(
-                                            onPressed: () =>
-                                                Navigator.of(ctx).pop(),
-                                            child: const Text('Cerrar'))
-                                      ],
-                                    ),
-                                  );
+                                  unawaited(_saveRemoteContact());
                                 },
                               ),
                               _controlButton(
                                 icon: Icons.link,
                                 color: Colors.white,
-                                semanticLabel: 'Invitar a llamada',
+                                label: 'Invitar',
+                                semanticLabel:
+                                    'Compartir invitación de llamada',
                                 onTap: () {
                                   HapticFeedback.selectionClick();
-                                  showDialog(
-                                    context: context,
-                                    builder: (ctx) => AlertDialog(
-                                      title: const Text('Invitar a llamada'),
-                                      content: const Text(
-                                          'Funcionalidad para invitar a la llamada.'),
-                                      actions: [
-                                        TextButton(
-                                            onPressed: () =>
-                                                Navigator.of(ctx).pop(),
-                                            child: const Text('Cerrar'))
-                                      ],
-                                    ),
-                                  );
+                                  unawaited(_shareCallInvite());
                                 },
                               ),
                               Container(
@@ -786,7 +2209,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                                 child: Text(
                                   _latencyMs == null
                                       ? 'Latencia n/d'
-                                      : '${_latencyMs} ms',
+                                      : '$_latencyMs ms',
                                   style: TextStyle(
                                     color: _networkColor,
                                     fontSize: 11,
@@ -813,20 +2236,37 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     required Color color,
     required VoidCallback onTap,
     String? semanticLabel,
+    String? label,
   }) {
     return Semantics(
       label: semanticLabel,
       button: true,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white.withAlpha(12),
-          shape: BoxShape.circle,
-        ),
-        child: CameraIconButton(
-          icon: icon,
-          tooltip: semanticLabel ?? '',
-          onTap: onTap,
-        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFEAF3FB),
+              shape: BoxShape.circle,
+            ),
+            child: CameraIconButton(
+              icon: icon,
+              tooltip: semanticLabel ?? '',
+              onTap: onTap,
+            ),
+          ),
+          if (label != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF6D7F92),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

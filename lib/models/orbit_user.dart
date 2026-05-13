@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// Incluye campos de perfil, seguridad y metadata
 class OrbitUser {
   final String uid;
+  final String? orbitNumber;
   final String? fullName;
   final String? email;
   final bool emailVerified;
@@ -24,6 +25,7 @@ class OrbitUser {
 
   OrbitUser({
     required this.uid,
+    this.orbitNumber,
     this.fullName,
     this.email,
     this.emailVerified = false,
@@ -47,6 +49,7 @@ class OrbitUser {
   Map<String, dynamic> toFirestore() {
     return {
       'uid': uid,
+      'orbitNumber': orbitNumber,
       'fullName': fullName,
       'email': email,
       'emailVerified': emailVerified,
@@ -74,6 +77,7 @@ class OrbitUser {
 
     return OrbitUser(
       uid: doc.id,
+      orbitNumber: data['orbitNumber'] as String?,
       fullName: data['fullName'] as String?,
       email: data['email'] as String?,
       emailVerified: data['emailVerified'] as bool? ?? false,
@@ -97,6 +101,7 @@ class OrbitUser {
   /// Crea copia con campos modificados
   OrbitUser copyWith({
     String? uid,
+    String? orbitNumber,
     String? fullName,
     String? email,
     bool? emailVerified,
@@ -117,6 +122,7 @@ class OrbitUser {
   }) {
     return OrbitUser(
       uid: uid ?? this.uid,
+      orbitNumber: orbitNumber ?? this.orbitNumber,
       fullName: fullName ?? this.fullName,
       email: email ?? this.email,
       emailVerified: emailVerified ?? this.emailVerified,

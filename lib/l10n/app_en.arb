@@ -1,0 +1,12 @@
+{
+  "appTitle": "Orbit",
+  "welcome": "Welcome to Orbit!",
+  "login": "Login",
+  "register": "Register",
+  "home": "Home",
+  "language": "Language",
+  "selectLanguage": "Select language",
+  "selectedLanguage": "Selected language: {lang}",
+  "error": "Error",
+  "success": "Success"
+}

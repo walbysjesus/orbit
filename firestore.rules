@@ -25,8 +25,19 @@ service cloud.firestore {
 
     function validOptionalString(field, maxLength) {
       return !(field in request.resource.data)
+        || request.resource.data[field] == null
         || (request.resource.data[field] is string
           && request.resource.data[field].size() <= maxLength);
+    }
+
+    function isOrgMember(orgId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/organizationUsers/$(orgId + '_' + request.auth.uid));
+    }
+
+    function isOrgAdmin(orgId) {
+      return isOrgMember(orgId)
+        && get(/databases/$(database)/documents/organizationUsers/$(orgId + '_' + request.auth.uid)).data.role == 'admin';
     }
 
     function validUserKeys(data) {
@@ -35,16 +46,26 @@ service cloud.firestore {
         'fullName',
         'documentType',
         'documentNumber',
+        'accountType',
         'orbitNumber',
         'orbitNumberAssignedAt',
         'country',
         'city',
+        'organizationId',
+        'organizationRole',
+        'organizationSector',
         'createdAt',
-        'fcmToken'
+        'fcmToken',
+        'mfaEnabled',
+        'preferredMfaMethod',
+        'mfaSetupAt',
+        'backupCodesCount'
       ]);
     }
 
     match /users/{userId} {
+      // Perfil privado completo: solo el dueño puede leer.
+      // Los datos públicos se exponen vía /users_public/{userId}.
       allow read: if isOwner(userId);
 
       allow create: if isOwner(userId)
@@ -53,9 +74,22 @@ service cloud.firestore {
         && validOptionalString('fullName', 120)
         && validOptionalString('documentType', 40)
         && validOptionalString('documentNumber', 60)
+        && validOptionalString('accountType', 40)
         && validOptionalString('orbitNumber', 16)
         && validOptionalString('country', 80)
         && validOptionalString('city', 80)
+        && validOptionalString('organizationId', 80)
+        && validOptionalString('organizationRole', 40)
+        && validOptionalString('organizationSector', 40)
+        && (
+          !('mfaEnabled' in request.resource.data)
+          || request.resource.data.mfaEnabled is bool
+        )
+        && validOptionalString('preferredMfaMethod', 40)
+        && (
+          !('backupCodesCount' in request.resource.data)
+          || request.resource.data.backupCodesCount is int
+        )
         && validOptionalString('fcmToken', 512);
 
       allow update: if isOwner(userId)
@@ -73,9 +107,43 @@ service cloud.firestore {
         && validOptionalString('fullName', 120)
         && validOptionalString('documentType', 40)
         && validOptionalString('documentNumber', 60)
+        && validOptionalString('accountType', 40)
         && validOptionalString('country', 80)
         && validOptionalString('city', 80)
+        && validOptionalString('organizationId', 80)
+        && validOptionalString('organizationRole', 40)
+        && validOptionalString('organizationSector', 40)
+        && (
+          !('mfaEnabled' in request.resource.data)
+          || request.resource.data.mfaEnabled is bool
+        )
+        && validOptionalString('preferredMfaMethod', 40)
+        && (
+          !('backupCodesCount' in request.resource.data)
+          || request.resource.data.backupCodesCount is int
+        )
         && validOptionalString('fcmToken', 512);
+
+      allow delete: if false;
+
+      match /contacts/{contactId} {
+        allow read, create, update: if isOwner(userId);
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    // ─── Perfil público (solo campos no sensibles) ────────────────────────
+    // Phase A: mirror de fullName, orbitNumber y accountType.
+    // El dueño escribe; cualquier usuario autenticado puede leer.
+    // users/{uid} permanece sin cambios por ahora (Phase B lo restringirá).
+    match /users_public/{userId} {
+      allow read: if isSignedIn();
+
+      allow create, update: if isOwner(userId)
+        && request.resource.data.keys().hasOnly(['fullName', 'orbitNumber', 'accountType'])
+        && validOptionalString('fullName', 120)
+        && validOptionalString('orbitNumber', 16)
+        && validOptionalString('accountType', 40);
 
       allow delete: if false;
     }
@@ -84,11 +152,15 @@ service cloud.firestore {
       allow read: if isSignedIn();
 
       allow create: if isSignedIn()
-        && !exists(/databases/$(database)/documents/orbitNumbers/$(numberId))
         && request.resource.data.keys().hasOnly(['uid', 'createdAt'])
         && request.resource.data.uid == request.auth.uid;
 
-      allow update, delete: if false;
+      // Permitir sobrescritura idempotente en reintentos de zonas remotas
+      allow update: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.uid == resource.data.uid;
+
+      allow delete: if false;
     }
 
     match /chatRooms/{roomId} {
@@ -99,7 +171,7 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid
         && validOptionalString('title', 80);
 
-      allow read: if isParticipant(resource.data);
+      allow read: if isSignedIn() && (resource == null || isParticipant(resource.data));
 
       allow update: if isParticipant(resource.data)
         && request.resource.data.participants == resource.data.participants
@@ -120,7 +192,39 @@ service cloud.firestore {
         && (
           (request.resource.data.type == 'text'
             && request.resource.data.text is string
-            && request.resource.data.text.matches('^e2er1:.*'))
+            && request.resource.data.text.matches('^e2er[12]:.*'))
+          || (request.resource.data.type != 'text')
+        )
+        && validOptionalString('text', 4000)
+        && validOptionalString('fileUrl', 512)
+        && validOptionalString('audioUrl', 512);
+
+      allow update, delete: if false;
+    }
+
+    match /messages/{messageId} {
+      allow read: if isSignedIn()
+        && request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(resource.data.roomId)).data.participants;
+
+      allow create: if isSignedIn()
+        && hasOnlyKeys([
+          'roomId',
+          'senderId',
+          'text',
+          'type',
+          'fileUrl',
+          'audioUrl',
+          'timestamp',
+          'createdAt',
+          'metadata'
+        ])
+        && request.resource.data.roomId is string
+        && request.resource.data.senderId == request.auth.uid
+        && request.auth.uid in get(/databases/$(database)/documents/chatRooms/$(request.resource.data.roomId)).data.participants
+        && (
+          (request.resource.data.type == 'text'
+            && request.resource.data.text is string
+            && request.resource.data.text.matches('^e2er[12]:.*'))
           || (request.resource.data.type != 'text')
         )
         && validOptionalString('text', 4000)
@@ -132,11 +236,26 @@ service cloud.firestore {
 
     match /callSessions/{callId} {
       allow create: if isSignedIn()
-        && hasOnlyKeys(['callerId', 'callerName', 'calleeId', 'status', 'startedAt', 'endedAt', 'updatedAt'])
+        && hasOnlyKeys([
+          'callerId',
+          'callerName',
+          'calleeId',
+          'callType',
+          'pushMode',
+          'status',
+          'startedAt',
+          'ringingExpiresAt',
+          'endedAt',
+          'updatedAt'
+        ])
         && request.resource.data.callerId == request.auth.uid
         && validOptionalString('callerName', 120)
         && request.resource.data.calleeId is string
-        && request.resource.data.calleeId != request.auth.uid;
+        && request.resource.data.calleeId != request.auth.uid
+        && (!('callType' in request.resource.data)
+          || request.resource.data.callType in ['voice', 'video'])
+        && (!('pushMode' in request.resource.data)
+          || request.resource.data.pushMode in ['direct']);
 
       allow read: if isSignedIn() && (
         request.auth.uid == resource.data.callerId
@@ -149,9 +268,39 @@ service cloud.firestore {
       )
       && request.resource.data.callerId == resource.data.callerId
       && request.resource.data.callerName == resource.data.callerName
-      && request.resource.data.calleeId == resource.data.calleeId;
+      && request.resource.data.calleeId == resource.data.calleeId
+      && (!('callType' in request.resource.data)
+        || request.resource.data.callType == resource.data.callType)
+      && (!('pushMode' in request.resource.data)
+        || request.resource.data.pushMode == resource.data.pushMode)
+      && (!('ringingExpiresAt' in request.resource.data)
+        || request.resource.data.ringingExpiresAt == resource.data.ringingExpiresAt);
 
       allow delete: if false;
+    }
+
+    match /callDiagnostics/{logId} {
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly([
+          'callSessionId',
+          'roomId',
+          'actorUid',
+          'peerUserId',
+          'eventType',
+          'createdAt',
+          'expiresAt',
+          'extra'
+        ])
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.eventType is string;
+
+      allow read: if isSignedIn()
+        && (
+          resource.data.actorUid == request.auth.uid
+          || resource.data.peerUserId == request.auth.uid
+        );
+
+      allow update, delete: if false;
     }
 
     match /iaConversations/{conversationId} {
@@ -183,6 +332,26 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /securityLogs/{logId} {
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly([
+          'userId',
+          'eventType',
+          'timestamp',
+          'details',
+          'ipAddress',
+          'userAgent',
+          'method'
+        ])
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.eventType is string;
+
+      allow read: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+
+      allow update, delete: if false;
+    }
+
     // ─── Señalización WebRTC via Firestore ───────────────────────────────
     // Datos efímeros (SDP + ICE). Solo usuarios autenticados.
     match /callSignaling/{roomId} {
@@ -195,6 +364,149 @@ service cloud.firestore {
       match /calleeCandidates/{docId} {
         allow read, write: if isSignedIn();
       }
+
+      match /events/{docId} {
+        allow read, write: if isSignedIn();
+      }
+    }
+
+    match /organizations/{orgId} {
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly([
+          'name',
+          'sector',
+          'adminUid',
+          'seatsPurchased',
+          'seatsUsed',
+          'status',
+          'plan',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.adminUid == request.auth.uid
+        && request.resource.data.seatsPurchased is int
+        && request.resource.data.seatsPurchased >= 1
+        && request.resource.data.seatsUsed is int
+        && request.resource.data.seatsUsed >= 0;
+
+      allow read: if isSignedIn();
+
+      allow update: if isSignedIn()
+        && request.resource.data.adminUid == resource.data.adminUid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.name == resource.data.name
+        && request.resource.data.sector == resource.data.sector
+        && request.resource.data.plan == resource.data.plan
+        && request.resource.data.status == resource.data.status
+        && (
+          // Admin puede ajustar cupos totales
+          (resource.data.adminUid == request.auth.uid
+            && request.resource.data.seatsUsed >= resource.data.seatsUsed)
+          ||
+          // Empleado puede consumir exactamente 1 cupo sin cambiar cupos comprados
+          (request.resource.data.seatsPurchased == resource.data.seatsPurchased
+            && request.resource.data.seatsUsed == resource.data.seatsUsed + 1)
+        );
+
+      allow delete: if false;
+    }
+
+    match /organizationUsage/{orgId} {
+      allow read, write: if isOrgMember(orgId);
+
+      match /dailyShards/{shardId} {
+        allow read, write: if isOrgMember(orgId);
+      }
+    }
+
+    match /organizationUsers/{membershipId} {
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly([
+          'orgId',
+          'uid',
+          'role',
+          'active',
+          'createdAt',
+          'updatedAt'
+        ])
+        && (
+          request.resource.data.uid == request.auth.uid
+          || isOrgAdmin(request.resource.data.orgId)
+        );
+
+      allow read: if isSignedIn()
+        && (
+          resource.data.uid == request.auth.uid
+          || isOrgAdmin(resource.data.orgId)
+        );
+
+      allow update: if isSignedIn()
+        && (
+          resource.data.uid == request.auth.uid
+          || isOrgAdmin(resource.data.orgId)
+        );
+
+      allow delete: if false;
+    }
+
+    match /organizationInvites/{inviteId} {
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly([
+          'orgId',
+          'email',
+          'role',
+          'status',
+          'createdBy',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.createdBy == request.auth.uid
+        && isOrgAdmin(request.resource.data.orgId)
+        && request.resource.data.status == 'pending';
+
+      allow read: if isSignedIn() && isOrgAdmin(resource.data.orgId);
+
+      allow update: if isSignedIn()
+        && isOrgAdmin(resource.data.orgId)
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if false;
+    }
+
+    match /organizationUsage/{orgId} {
+      allow read: if isSignedIn() && isOrgMember(orgId);
+
+      allow create: if isSignedIn()
+        && isOrgMember(orgId)
+        && request.resource.data.keys().hasOnly([
+          'orgId',
+          'messagesSent',
+          'minutesUsed',
+          'updatedAt'
+        ])
+        && request.resource.data.orgId == orgId
+        && request.resource.data.messagesSent is int
+        && request.resource.data.minutesUsed is int
+        && request.resource.data.messagesSent >= 0
+        && request.resource.data.minutesUsed >= 0;
+
+      allow update: if isSignedIn()
+        && isOrgMember(orgId)
+        && request.resource.data.keys().hasOnly([
+          'orgId',
+          'messagesSent',
+          'minutesUsed',
+          'updatedAt'
+        ])
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.messagesSent is int
+        && request.resource.data.minutesUsed is int
+        && request.resource.data.messagesSent >= resource.data.messagesSent
+        && request.resource.data.minutesUsed >= resource.data.minutesUsed;
+
+      allow delete: if false;
     }
 
     // Deny all other access by default

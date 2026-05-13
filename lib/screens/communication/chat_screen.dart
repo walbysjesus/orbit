@@ -1,1920 +1,1971 @@
-import '../../utils/camera_icon_button.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter_sound/flutter_sound.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_sound/flutter_sound.dart';
-import 'package:http/http.dart' as http;
-import 'package:image_picker/image_picker.dart';
-import 'package:open_filex/open_filex.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:video_player/video_player.dart';
-import '../../services/auth_service.dart';
-import '../../services/chat_api_service.dart';
-import '../../services/e2e_chat_crypto_service.dart';
-import '../../services/network_service.dart';
-import '../../utils/audio_record_indicator.dart';
+import '../../domain/entities/message_entity.dart';
+import '../../presentation/widgets/chat_bubble.dart';
 import 'video_call_screen.dart';
+import '../../services/e2e_chat_crypto_service.dart';
+import '../../services/fcm_service.dart';
+import '../../services/resilient_stream_helper.dart';
+import '../../utils/error_presenter.dart';
 
-class ChatScreen extends StatefulWidget {
-  final String contactNameOrId;
-  const ChatScreen({super.key, required this.contactNameOrId});
+class ChatScreen extends ConsumerStatefulWidget {
+  final String remoteUserId;
+  final String? initialContactName;
+
+  const ChatScreen({
+    super.key,
+    required this.remoteUserId,
+    this.initialContactName,
+  });
 
   @override
-  State<ChatScreen> createState() => _ChatScreenState();
+  ConsumerState<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
-  final TextEditingController _controller = TextEditingController();
-  final ImagePicker _imagePicker = ImagePicker();
-  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
-  final FlutterSoundPlayer _player = FlutterSoundPlayer();
-  final E2EChatCryptoService _crypto = E2EChatCryptoService();
-
-  // ── Firestore real-time ──
-  String? _roomId;
-  StreamSubscription<QuerySnapshot>? _msgSub;
-
-  List<Map<String, dynamic>> _messages = [];
-  bool _isRecording = false;
-  bool _recorderBusy = false;
-  bool _recorderReady = false;
-  bool _playerReady = false;
-  bool _sendingFile = false;
-  bool _useFirestore = false;
-  Duration _recordingElapsed = Duration.zero;
-  Timer? _recordingTicker;
-  String? _activeAudioPath;
-  String _activeEmojiCategory = 'Caras';
-  String _networkHint = 'Analizando enlace...';
-  Color _networkHintColor = const Color(0xFF8FA9C2);
-  Timer? _networkHintTimer;
-
-  static const Map<String, List<String>> _emojiCategories = {
-    'Caras': [
-      '😀',
-      '😃',
-      '😄',
-      '😁',
-      '😆',
-      '🥹',
-      '😂',
-      '🤣',
-      '😊',
-      '🙂',
-      '😉',
-      '😍',
-      '😘',
-      '😎',
-      '🤔',
-      '😴',
-      '😤',
-      '😭',
-      '😡',
-      '🤯',
-      '🥳',
-      '😇',
-      '😱',
-      '🥶',
-    ],
-    'Gestos': [
-      '👍',
-      '👎',
-      '👏',
-      '🙌',
-      '🙏',
-      '🤝',
-      '💪',
-      '🫶',
-      '👀',
-      '✅',
-      '❌',
-      '⚠️',
-      '💯',
-      '🔥',
-      '✨',
-      '🎉',
-      '🚀',
-      '📌',
-      '💡',
-      '🧠',
-      '📣',
-      '🫡',
-      '👌',
-      '🤞',
-    ],
-    'Objetos': [
-      '📞',
-      '📱',
-      '💻',
-      '⌚',
-      '🎧',
-      '🎤',
-      '🎵',
-      '📷',
-      '🎥',
-      '📁',
-      '📎',
-      '📝',
-      '🛠️',
-      '🔋',
-      '📡',
-      '🛰️',
-      '🧭',
-      '🔒',
-      '🔔',
-      '💳',
-      '💾',
-      '🧩',
-      '🖥️',
-      '🗂️',
-    ],
-    'Viajes': [
-      '🌍',
-      '🌎',
-      '🌏',
-      '🏙️',
-      '🏠',
-      '🛫',
-      '🛬',
-      '🚆',
-      '🚗',
-      '🚕',
-      '🚌',
-      '🚲',
-      '🚀',
-      '⛽',
-      '🗺️',
-      '🧳',
-      '🏖️',
-      '🏔️',
-      '🌦️',
-      '☀️',
-      '🌙',
-      '⭐',
-      '⚡',
-      '🌧️',
-    ],
-    'Corazones': [
-      '❤️',
-      '🩷',
-      '🧡',
-      '💛',
-      '💚',
-      '💙',
-      '🩵',
-      '💜',
-      '🤍',
-      '🖤',
-      '🤎',
-      '💔',
-      '❣️',
-      '💕',
-      '💞',
-      '💓',
-      '💗',
-      '💖',
-      '💘',
-      '💝',
-      '💟',
-      '❤️\u200d🔥',
-      '❤️\u200d🩹',
-      '🫀',
-    ],
+class _ChatScreenState extends ConsumerState<ChatScreen> {
+  static const int _pageSize = 20;
+  static const int _maxInMemoryMessages = 600;
+  static const int _maxAttachmentBytes = 10 * 1024 * 1024;
+  static const Set<String> _allowedAttachmentExtensions = {
+    'jpg',
+    'jpeg',
+    'png',
+    'gif',
+    'webp',
+    'pdf',
+    'txt',
+    'doc',
+    'docx',
+    'xls',
+    'xlsx',
+    'ppt',
+    'pptx',
+    'zip',
+    'rar',
+    'mp3',
+    'm4a',
+    'wav',
+    'ogg',
+    'mp4',
   };
 
-  MaterialBanner? _banner;
+  final TextEditingController _controller = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
+  final E2EChatCryptoService _crypto = E2EChatCryptoService();
+
+  bool _showEmojiPicker = false;
+  bool _uploading = false;
+  bool _isRecordingAudio = false;
+  bool _sendingAudio = false;
+  int _recordingSeconds = 0;
+  bool _initializing = true;
+  bool _markingRoomAsRead = false;
+  Timer? _readReceiptDebounceTimer;
+  DateTime? _pendingReadReceiptAt;
+  DateTime? _lastReadReceiptSentAt;
+
+  MessageEntity? _replyTo;
+  String? _roomId;
+  String? _contactName;
+  Map<String, dynamic>? _roomData;
+  List<Map<String, dynamic>> _messages = [];
+  final Set<String> _hiddenMessageIds = <String>{};
+  bool _showScrollToBottomFab = false;
+
+  // Mensajes pendientes (optimista): se muestran inmediatamente y se eliminan al confirmar.
+  final List<Map<String, dynamic>> _pendingMessages = [];
+
+  final FirebaseStorage _storage = FirebaseStorage.instance;
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+      _messagesSubscription;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _roomSubscription;
+  ResilientStreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+      _messagesResilient;
+  ResilientStreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+      _roomResilient;
+  Timer? _recordingTimer;
+
+  bool _hasMore = true;
+  bool _loadingMoreMessages = false;
+  bool _legacyFallbackLoaded = false;
+  bool _legacyMirrorEnabled = true;
+  QueryDocumentSnapshot<Map<String, dynamic>>? _oldestMessageDoc;
+  bool _isAtBottom = true;
+  String? _selectedMessageId;
+  String _connectionStateLabel = 'Conectando...';
+  RealtimeUxState _connectionState = RealtimeUxState.reconnecting;
+  ResilientStreamStatus _roomStreamStatus = ResilientStreamStatus.connecting;
+  ResilientStreamStatus _messagesStreamStatus =
+      ResilientStreamStatus.connecting;
+
+  String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
+  String get _remoteUserId => widget.remoteUserId.trim();
+
+  bool get _fallbackLooksLikeUid {
+    final v = widget.remoteUserId.trim();
+    // Heurística simple para IDs tipo Firebase UID (alfa-numérico largo, sin espacios).
+    return v.length >= 20 &&
+        !v.contains(' ') &&
+        RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(v);
+  }
+
+  String get _contactTitle {
+    final resolved = (_contactName ?? '').trim();
+    if (resolved.isNotEmpty) return resolved;
+    if ((widget.initialContactName ?? '').trim().isNotEmpty) {
+      return widget.initialContactName!.trim();
+    }
+    if (_fallbackLooksLikeUid) return 'Cargando contacto...';
+    return widget.remoteUserId;
+  }
 
   @override
   void initState() {
     super.initState();
-    unawaited(_initializeChatSecurity());
-    unawaited(_refreshNetworkHint());
-    _networkHintTimer = Timer.periodic(
-      const Duration(seconds: 28),
-      (_) => unawaited(_refreshNetworkHint()),
-    );
+    FCMService.setActiveChatPeer(widget.remoteUserId);
+    final initialName = (widget.initialContactName ?? '').trim();
+    if (initialName.isNotEmpty) {
+      _contactName = initialName;
+    }
+    unawaited(_crypto.initialize());
+    unawaited(_initRecorder());
+    unawaited(_loadContactName());
+    _bootstrapRoom();
+    _scrollController.addListener(_onScroll);
   }
 
-  Future<void> _initializeChatSecurity() async {
+  Future<void> _initRecorder() async {
     try {
-      await _crypto.initialize();
+      await _recorder.openRecorder();
     } catch (_) {
-      if (mounted) {
-        _showBanner(
-          'No se pudo inicializar cifrado local seguro',
-          Colors.redAccent,
-        );
+      // Ignorar: se manejará al intentar grabar.
+    }
+  }
+
+  Future<void> _loadContactName() async {
+    if (_remoteUserId.isEmpty) return;
+    try {
+      final snap =
+          await _db.collection('users_public').doc(_remoteUserId).get();
+      if (!mounted) return; // lifecycle safety fix
+      final data = snap.data();
+      final publicName =
+          ((data?['fullName'] ?? data?['displayName'] ?? '') as Object)
+              .toString()
+              .trim();
+
+      if (publicName.isNotEmpty) {
+        if (mounted) {
+          setState(() => _contactName = publicName);
+        }
+        return;
+      }
+
+      final currentUid = _currentUserId;
+      if (currentUid.isEmpty) return;
+
+      // Fallback: usa el nombre local guardado en contactos del usuario actual.
+      final localContactSnap = await _db
+          .collection('users')
+          .doc(currentUid)
+          .collection('contacts')
+          .doc(_remoteUserId)
+          .get();
+      if (!mounted) return; // lifecycle safety fix
+      final localData = localContactSnap.data();
+      final localName =
+          ((localData?['fullName'] ?? '') as Object).toString().trim();
+
+      if (mounted && localName.isNotEmpty) {
+        setState(() => _contactName = localName);
+      }
+    } catch (_) {
+      // Fallback de error: intenta resolver nombre desde contactos locales.
+      try {
+        final currentUid = _currentUserId;
+        if (currentUid.isEmpty || !mounted) return;
+        final localContactSnap = await _db
+            .collection('users')
+            .doc(currentUid)
+            .collection('contacts')
+            .doc(_remoteUserId)
+            .get();
+        final localData = localContactSnap.data();
+        final localName =
+            ((localData?['fullName'] ?? '') as Object).toString().trim();
+        if (mounted && localName.isNotEmpty) {
+          setState(() => _contactName = localName);
+        }
+      } catch (_) {
+        // Ignorar para no afectar apertura del chat.
       }
     }
-    await _initChat();
   }
 
-  @override
-  void dispose() {
-    _msgSub?.cancel();
-    _recordingTicker?.cancel();
-    _networkHintTimer?.cancel();
-    unawaited(_cleanupPlayer());
-    unawaited(_cleanupRecorder());
-    _controller.dispose();
-    super.dispose();
+  Future<void> _bootstrapRoom() async {
+    try {
+      final currentUid = _currentUserId;
+      if (currentUid.isEmpty || _remoteUserId.isEmpty) {
+        if (!mounted) return;
+        setState(() => _initializing = false);
+        return;
+      }
+
+      final sortedIds = [currentUid, _remoteUserId]..sort();
+      final deterministicRoomId = '${sortedIds[0]}_${sortedIds[1]}';
+      final deterministicRef =
+          _db.collection('chatRooms').doc(deterministicRoomId);
+      final deterministicSnap = await deterministicRef.get();
+      if (!mounted) return; // lifecycle safety fix
+
+      String resolvedRoomId = deterministicRoomId;
+
+      if (!deterministicSnap.exists) {
+        final fallbackQuery = await _db
+            .collection('chatRooms')
+            .where('participants', arrayContains: currentUid)
+            .limit(100)
+            .get();
+        if (!mounted) return; // lifecycle safety fix
+
+        final existing = fallbackQuery.docs.where((doc) {
+          final participants = List<String>.from(
+              (doc.data()['participants'] as List?) ?? const []);
+          return participants.contains(_remoteUserId);
+        }).toList();
+
+        if (existing.isNotEmpty) {
+          resolvedRoomId = existing.first.id;
+        } else {
+          await deterministicRef.set({
+            'participants': [currentUid, _remoteUserId],
+            'createdBy': currentUid,
+            'title': '',
+            'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          if (!mounted) return; // lifecycle safety fix
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _roomId = resolvedRoomId;
+        _initializing = false;
+      });
+
+      unawaited(_resolveRoomWritePolicy(resolvedRoomId));
+
+      _subscribeRoom();
+      _subscribeMessages();
+      unawaited(_markRoomAsRead(force: true));
+
+      unawaited(_loadContactName());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _initializing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo inicializar el chat: $e')),
+      );
+    }
   }
 
-  Future<void> _refreshNetworkHint() async {
-    final networkService = NetworkService();
-    final quality = await networkService.getNetworkQuality();
-    final latency = await networkService.measureLatencyMs();
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final atBottom = pos.pixels >= pos.maxScrollExtent - 50;
+
+    if (atBottom != _isAtBottom) {
+      setState(() {
+        _isAtBottom = atBottom;
+        _showScrollToBottomFab = !atBottom;
+      });
+    }
+
+    if (pos.pixels <= 100 && _hasMore) {
+      unawaited(_loadOlderMessages());
+    }
+
+    if (_isAtBottom) {
+      unawaited(_scheduleReadReceiptFlush());
+    }
+  }
+
+  Future<void> _resolveRoomWritePolicy(String roomId) async {
+    try {
+      final snap = await _db.collection('chatRooms').doc(roomId).get();
+      if (!mounted || !snap.exists) return;
+      final data = snap.data() ?? const <String, dynamic>{};
+      final mirror = data['legacyMessageMirror'];
+      if (mirror is bool) {
+        if (mounted) setState(() => _legacyMirrorEnabled = mirror);
+      } else if (mirror == null) {
+        // Default to compat mode for existing rooms.
+        await _db.collection('chatRooms').doc(roomId).set({
+          'legacyMessageMirror': true,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    } catch (_) {
+      // Keep safe default: mirror legacy writes if the policy cannot be read.
+    }
+  }
+
+  void _subscribeRoom() {
+    final roomId = _roomId;
+    if (roomId == null) return;
+
+    unawaited(_roomResilient?.cancel());
+    _roomSubscription?.cancel();
+    _roomResilient =
+        ResilientStreamSubscription<DocumentSnapshot<Map<String, dynamic>>>(
+      streamFactory: () => _db.collection('chatRooms').doc(roomId).snapshots(),
+      timeout: const Duration(seconds: 15),
+      logTag: 'ChatRoomStream:$roomId',
+      onStatus: (status) {
+        _applyConnectionStatus(status, isRoomStream: true);
+      },
+      onError: (error, _) {
+        debugPrint('[ChatRoomStream:$roomId] error=$error');
+      },
+      onData: (snap) {
+        if (!mounted) return;
+        setState(() {
+          _roomData = snap.data();
+        });
+      },
+    );
+    _roomResilient!.start();
+  }
+
+  void _subscribeMessages() {
+    final roomId = _roomId;
+    if (roomId == null) return;
+
+    unawaited(_messagesResilient?.cancel());
+    _messagesSubscription?.cancel();
+    _oldestMessageDoc = null;
+    _hasMore = true;
+    _legacyFallbackLoaded = false;
+
+    _messagesResilient =
+        ResilientStreamSubscription<QuerySnapshot<Map<String, dynamic>>>(
+      streamFactory: () => _db
+          .collection('messages')
+          .where('roomId', isEqualTo: roomId)
+          .orderBy('timestamp', descending: true)
+          .limit(_pageSize)
+          .snapshots(includeMetadataChanges: true),
+      timeout: const Duration(seconds: 15),
+      logTag: 'ChatMessagesStream:$roomId',
+      onStatus: (status) {
+        _applyConnectionStatus(status, isRoomStream: false);
+      },
+      onError: (error, _) {
+        debugPrint('[ChatMessagesStream:$roomId] error=$error');
+      },
+      onData: (snap) {
+        if (!mounted) return; // lifecycle safety fix
+        final uid = _currentUserId;
+        final latestBatch = snap.docs.reversed.map((doc) {
+          return _messageFromDoc(doc, currentUserId: uid);
+        }).where((msg) {
+          final id = (msg['id'] ?? '').toString();
+          return id.isNotEmpty && !_hiddenMessageIds.contains(id);
+        }).toList();
+
+        if (snap.docs.isNotEmpty) {
+          _oldestMessageDoc = snap.docs.last;
+        }
+
+        if (snap.docs.isEmpty && _messages.isEmpty && !_legacyFallbackLoaded) {
+          _legacyFallbackLoaded = true;
+          unawaited(_loadLegacyMessagesOnce(roomId));
+        }
+
+        final latestIds = latestBatch
+            .map((m) => (m['id'] ?? '').toString())
+            .where((id) => id.isNotEmpty)
+            .toSet();
+
+        final preservedOlder = _messages
+            .where((m) => !latestIds.contains((m['id'] ?? '').toString()))
+            .toList();
+
+        final msgs = [...latestBatch, ...preservedOlder];
+        msgs.sort((a, b) {
+          final ta = _extractTimestamp(a)?.millisecondsSinceEpoch ?? 0;
+          final tb = _extractTimestamp(b)?.millisecondsSinceEpoch ?? 0;
+          return ta.compareTo(tb);
+        });
+
+        final trimmed = _trimForLargeChats(msgs);
+
+        setState(() {
+          _messages = trimmed;
+          _hasMore = snap.docs.length == _pageSize;
+        });
+
+        if (_isAtBottom) _scrollToBottom();
+        unawaited(_markRoomAsRead());
+      },
+    );
+    _messagesResilient!.start();
+  }
+
+  void _applyConnectionStatus(
+    ResilientStreamStatus status, {
+    required bool isRoomStream,
+  }) {
+    if (!mounted) return;
+    if (isRoomStream) {
+      _roomStreamStatus = status;
+    } else {
+      _messagesStreamStatus = status;
+    }
 
     String label;
-    Color color;
+    RealtimeUxState nextState;
+    final hasOffline = _roomStreamStatus == ResilientStreamStatus.timeout ||
+        _roomStreamStatus == ResilientStreamStatus.offline ||
+        _messagesStreamStatus == ResilientStreamStatus.timeout ||
+        _messagesStreamStatus == ResilientStreamStatus.offline;
+    final hasReconnecting =
+        _roomStreamStatus == ResilientStreamStatus.connecting ||
+            _roomStreamStatus == ResilientStreamStatus.reconnecting ||
+            _messagesStreamStatus == ResilientStreamStatus.connecting ||
+            _messagesStreamStatus == ResilientStreamStatus.reconnecting;
 
-    if (quality == NetworkQuality.none) {
-      label = 'Sin conexión';
-      color = const Color(0xFFE46E6E);
-    } else if (quality == NetworkQuality.low) {
-      label = 'Señal inestable';
-      color = const Color(0xFFFFB46A);
-    } else if (quality == NetworkQuality.medium) {
-      if (latency != null && latency > 240) {
-        label = 'Media, latencia alta';
-        color = const Color(0xFFF1C96B);
-      } else {
-        label = 'Señal media';
-        color = const Color(0xFFE5CE72);
+    if (hasOffline) {
+      label = status == ResilientStreamStatus.timeout
+          ? 'Sin conexión (timeout). Reintentando...'
+          : 'Sin conexión';
+      nextState = status == ResilientStreamStatus.timeout
+          ? RealtimeUxState.timeout
+          : RealtimeUxState.offline;
+      if (_initializing) {
+        // lifecycle safety fix
+        setState(() => _initializing = false);
       }
+    } else if (hasReconnecting) {
+      label = 'Reconectando...';
+      nextState = RealtimeUxState.reconnecting;
     } else {
-      label = 'Señal estable';
-      color = const Color(0xFF6ED6B1);
+      label = 'En línea';
+      nextState = RealtimeUxState.online;
     }
 
-    if (!mounted) return;
-    setState(() {
-      _networkHint = latency == null ? label : '$label · ${latency} ms';
-      _networkHintColor = color;
-    });
-  }
-
-  Future<void> _cleanupRecorder() async {
-    try {
-      if (_isRecording) {
-        await _recorder.stopRecorder();
-      }
-      if (_recorderReady) {
-        await _recorder.closeRecorder();
-      }
-    } catch (_) {
-      // Evita romper el dispose por cierres duplicados o tardíos.
-    }
-  }
-
-  Future<void> _cleanupPlayer() async {
-    try {
-      if (_playerReady) {
-        await _player.stopPlayer();
-        await _player.closePlayer();
-      }
-    } catch (_) {
-      // Evita romper el dispose por cierres duplicados o tardíos.
-    }
-  }
-
-  // ================= CHAT INIT =================
-
-  Future<void> _initChat() async {
-    final currentUser = AuthService.getCurrentUser();
-    if (currentUser == null) {
-      // Sin sesión: usa almacenamiento local cifrado
-      _useFirestore = false;
-      _loadLocalMessages();
-      return;
-    }
-
-    try {
-      _roomId = await ChatApiService.getOrCreateRoom(widget.contactNameOrId);
-      _useFirestore = true;
-      _subscribeToMessages();
-    } catch (_) {
-      // Si falla Firestore, degradar a local sin interrumpir usuario
-      _useFirestore = false;
-      _loadLocalMessages();
-    }
-  }
-
-  void _subscribeToMessages() {
-    if (_roomId == null) return;
-    _msgSub = ChatApiService.messagesStream(_roomId!).listen((snap) {
-      if (!mounted) return;
-      final currentUid = AuthService.getCurrentUser()?.uid ?? '';
-      final remoteMessages = snap.docs.map((doc) {
-        final d = doc.data();
-        return {
-          'text': d['text'] ?? d['fileUrl'] ?? '',
-          'fromMe': d['senderId'] == currentUid,
-          'timestamp':
-              (d['timestamp'] as Timestamp?)?.toDate().toIso8601String() ??
-                  DateTime.now().toIso8601String(),
-          'audioUrl': d['type'] == 'audio' ? d['fileUrl'] : null,
-          'audioPath': null,
-          'mediaType': d['type'],
-          'durationMs': d['metadata']?['durationMs'],
-          'fileName': d['metadata']?['fileName'],
-          'filePath': null,
-        };
-      }).toList();
-      unawaited(_mergeRemoteMessages(remoteMessages));
-    }, onError: (_) {
-      _showBanner('Error de conexión en chat', Colors.redAccent);
-    });
-  }
-
-  Future<void> _mergeRemoteMessages(
-      List<Map<String, dynamic>> remoteMessages) async {
-    final cachedMessages = await _loadCachedMessages();
-    final localMediaMessages = cachedMessages
-        .where((message) =>
-            message['audioPath'] != null ||
-            message['filePath'] != null ||
-            message['mediaType'] != null)
-        .toList();
-
-    final merged = [...remoteMessages, ...localMediaMessages];
-    merged.sort((left, right) => (left['timestamp'] ?? '')
-        .toString()
-        .compareTo((right['timestamp'] ?? '').toString()));
-
-    if (!mounted) return;
-    setState(() {
-      _messages = merged;
-    });
-  }
-
-  Future<List<Map<String, dynamic>>> _loadCachedMessages() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('chat_${widget.contactNameOrId}');
-    if (raw == null) return [];
-    return List<Map<String, dynamic>>.from(jsonDecode(raw));
-  }
-
-  Future<void> _addLocalMessage(Map<String, dynamic> message) async {
-    if (!mounted) return;
-    setState(() {
-      _messages.add(message);
-    });
-    await _saveLocalMessages();
-  }
-
-  Future<void> _updateUploadingMessage(
-      String uploadId, Map<String, dynamic> updates,
-      {bool persist = false}) async {
-    if (!mounted) return;
-
-    setState(() {
-      final index = _messages.indexWhere((m) => m['uploadId'] == uploadId);
-      if (index != -1) {
-        _messages[index] = {..._messages[index], ...updates};
-      }
-    });
-
-    if (persist) {
-      await _saveLocalMessages();
-    }
-  }
-
-  Future<void> _removeUploadingMessage(String uploadId) async {
-    if (!mounted) return;
-
-    setState(() {
-      _messages.removeWhere((m) => m['uploadId'] == uploadId);
-    });
-
-    await _saveLocalMessages();
-  }
-
-  Future<Directory> _downloadsDir() async {
-    final baseDir = await getApplicationDocumentsDirectory();
-    final downloads = Directory(
-      '${baseDir.path}${Platform.pathSeparator}chat_downloads',
-    );
-    if (!await downloads.exists()) {
-      await downloads.create(recursive: true);
-    }
-    return downloads;
-  }
-
-  Future<String> _downloadRemoteFile({
-    required String url,
-    required String suggestedName,
-  }) async {
-    final response = await http.get(Uri.parse(url));
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw StateError('Error HTTP ${response.statusCode}');
-    }
-
-    final safeName = suggestedName.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    final dir = await _downloadsDir();
-    final path = '${dir.path}${Platform.pathSeparator}$safeName';
-    final file = File(path);
-    await file.writeAsBytes(response.bodyBytes, flush: true);
-    return file.path;
-  }
-
-  Future<String?> _ensureLocalMediaSource(Map<String, dynamic> msg) async {
-    final source = _resolveMediaSource(msg);
-    if (source == null) return null;
-
-    if (!_isRemoteSource(source)) return source;
-
-    final fileName = (msg['fileName'] as String?)?.trim();
-    final ext = msg['mediaType'] == 'audio'
-        ? 'aac'
-        : (msg['mediaType'] == 'image')
-            ? 'jpg'
-            : (msg['mediaType'] == 'video')
-                ? 'mp4'
-                : 'bin';
-
-    final localPath = await _downloadRemoteFile(
-      url: source,
-      suggestedName:
-          fileName != null && fileName.isNotEmpty ? fileName : 'adjunto.$ext',
-    );
-
-    return localPath;
-  }
-
-  Future<void> _openAttachment(Map<String, dynamic> msg) async {
-    try {
-      final localPath = await _ensureLocalMediaSource(msg);
-      if (localPath == null) return;
-
-      final result = await OpenFilex.open(localPath);
-      if (result.type != ResultType.done) {
-        _showBanner('No se pudo abrir el archivo', Colors.redAccent);
-      }
-    } catch (_) {
-      _showBanner('No se pudo abrir el adjunto', Colors.redAccent);
-    }
-  }
-
-  Future<void> _downloadAttachment(Map<String, dynamic> msg) async {
-    try {
-      final source = _resolveMediaSource(msg);
-      if (source == null) return;
-
-      String savedPath;
-      if (_isRemoteSource(source)) {
-        final fileName = (msg['fileName'] as String?)?.trim();
-        savedPath = await _downloadRemoteFile(
-          url: source,
-          suggestedName: fileName != null && fileName.isNotEmpty
-              ? fileName
-              : 'adjunto_descargado.bin',
-        );
-      } else {
-        final fileName = _fileNameFromPath(source);
-        final dir = await _downloadsDir();
-        final targetPath = '${dir.path}${Platform.pathSeparator}$fileName';
-        savedPath = await File(source).copy(targetPath).then((f) => f.path);
-      }
-
-      _showBanner('Archivo guardado en: $savedPath', Colors.green);
-    } catch (_) {
-      _showBanner('No se pudo descargar el adjunto', Colors.redAccent);
-    }
-  }
-
-  Future<void> _sendOrStoreMedia({
-    required String localPath,
-    required String type,
-    String? fileName,
-    int? durationMs,
-  }) async {
-    final timestamp = DateTime.now();
-    final safeName = (fileName ?? _fileNameFromPath(localPath))
-        .replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    final uploadId = '${timestamp.microsecondsSinceEpoch}_$safeName';
-
-    final localMessage = {
-      'text': fileName ?? type,
-      'audioPath': type == 'audio' ? localPath : null,
-      'audioUrl': null,
-      'filePath': type == 'audio' ? null : localPath,
-      'fileUrl': null,
-      'mediaType': type,
-      'durationMs': durationMs,
-      'fileName': fileName ?? safeName,
-      'fromMe': true,
-      'timestamp': timestamp.toIso8601String(),
-      'uploadId': uploadId,
-      'isUploading': _useFirestore && _roomId != null,
-      'uploadProgress': 0.0,
-      'canRetryUpload': false,
-    };
-
-    if (!_useFirestore || _roomId == null) {
-      await _addLocalMessage(localMessage);
-      return;
-    }
-
-    await _addLocalMessage(localMessage);
-
-    await _uploadMediaFromLocal(
-      uploadId: uploadId,
-      localPath: localPath,
-      type: type,
-      fileName: fileName,
-      durationMs: durationMs,
-    );
-  }
-
-  Future<void> _uploadMediaFromLocal({
-    required String uploadId,
-    required String localPath,
-    required String type,
-    String? fileName,
-    int? durationMs,
-  }) async {
-    if (!_useFirestore || _roomId == null) return;
-
-    try {
-      final storage = FirebaseStorage.instance;
-      final timestamp = DateTime.now();
-      final safeName = (fileName ?? _fileNameFromPath(localPath))
-          .replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-      final ref = storage
-          .ref()
-          .child('chatRooms')
-          .child(_roomId!)
-          .child('${type}_${timestamp.millisecondsSinceEpoch}_$safeName');
-
-      final task = ref.putFile(File(localPath));
-      task.snapshotEvents.listen((snapshot) {
-        final total = snapshot.totalBytes;
-        final progress = total <= 0 ? 0.0 : snapshot.bytesTransferred / total;
-        unawaited(_updateUploadingMessage(uploadId, {
-          'uploadProgress': progress,
-        }));
-      });
-
-      await task;
-      final url = await ref.getDownloadURL();
-
-      await ChatApiService.sendMediaMessage(
-        roomId: _roomId!,
-        fileUrl: url,
-        type: type,
-        fileName: fileName,
-        metadata: {
-          if (durationMs != null) 'durationMs': durationMs,
-        },
-      );
-
-      await _removeUploadingMessage(uploadId);
-    } catch (_) {
-      await _updateUploadingMessage(
-        uploadId,
-        {
-          'isUploading': false,
-          'uploadProgress': 0.0,
-          'canRetryUpload': true,
-        },
-        persist: true,
-      );
-
-      _showBanner(
-        'Storage no disponible. Se guardó el archivo en este dispositivo.',
-        Colors.orangeAccent,
-      );
-    }
-  }
-
-  Future<void> _retryUploadMessage(Map<String, dynamic> msg) async {
-    if (!_useFirestore || _roomId == null) {
-      _showBanner(
-          'Inicia sesión para subir archivos al chat', Colors.orangeAccent);
-      return;
-    }
-
-    final localPath = (msg['audioPath'] ?? msg['filePath']) as String?;
-    final mediaType = (msg['mediaType'] as String?)?.trim();
-    if (localPath == null || mediaType == null || mediaType.isEmpty) {
-      _showBanner(
-          'No se encontró el archivo local para reintentar', Colors.redAccent);
-      return;
-    }
-
-    final uploadId = (msg['uploadId'] as String?) ??
-        '${DateTime.now().microsecondsSinceEpoch}_${_fileNameFromPath(localPath)}';
-
-    await _updateUploadingMessage(
-      uploadId,
-      {
-        'uploadId': uploadId,
-        'isUploading': true,
-        'uploadProgress': 0.0,
-        'canRetryUpload': false,
-      },
-      persist: true,
-    );
-
-    await _uploadMediaFromLocal(
-      uploadId: uploadId,
-      localPath: localPath,
-      type: mediaType,
-      fileName: msg['fileName'] as String?,
-      durationMs: (msg['durationMs'] as num?)?.toInt(),
-    );
-  }
-
-  String? _resolveMediaSource(Map<String, dynamic> message) {
-    return (message['audioPath'] ??
-            message['filePath'] ??
-            message['audioUrl'] ??
-            message['fileUrl'])
-        ?.toString();
-  }
-
-  bool _isRemoteSource(String source) {
-    return source.startsWith('http://') || source.startsWith('https://');
-  }
-
-  void _insertEmoji(String emoji) {
-    final selection = _controller.selection;
-    final text = _controller.text;
-
-    final start = selection.start >= 0 ? selection.start : text.length;
-    final end = selection.end >= 0 ? selection.end : text.length;
-    final newText = text.replaceRange(start, end, emoji);
-    final newOffset = start + emoji.length;
-
-    _controller.value = TextEditingValue(
-      text: newText,
-      selection: TextSelection.collapsed(offset: newOffset),
-    );
-  }
-
-  void _openEmojiPicker() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF111827),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) {
-          final categories = _emojiCategories.keys.toList();
-          final emojis = _emojiCategories[_activeEmojiCategory] ?? const [];
-
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Teclado de emojis',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: categories.map((category) {
-                        final selected = category == _activeEmojiCategory;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ChoiceChip(
-                            label: Text(category),
-                            selected: selected,
-                            onSelected: (_) {
-                              HapticFeedback.selectionClick();
-                              setState(() => _activeEmojiCategory = category);
-                              setSheetState(() {});
-                            },
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  GridView.builder(
-                    shrinkWrap: true,
-                    itemCount: emojis.length,
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 8,
-                      mainAxisSpacing: 8,
-                      crossAxisSpacing: 8,
-                    ),
-                    itemBuilder: (_, index) {
-                      final emoji = emojis[index];
-                      return InkWell(
-                        borderRadius: BorderRadius.circular(14),
-                        onTap: () {
-                          HapticFeedback.selectionClick();
-                          _insertEmoji(emoji);
-                        },
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          alignment: Alignment.center,
-                          child:
-                              Text(emoji, style: const TextStyle(fontSize: 24)),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  // ================= MESSAGES (local fallback) =================
-
-  Future<void> _loadLocalMessages() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('chat_${widget.contactNameOrId}');
-    if (raw != null && mounted) {
+    if (_connectionStateLabel != label || _connectionState != nextState) {
       setState(() {
-        _messages = List<Map<String, dynamic>>.from(jsonDecode(raw));
+        _connectionStateLabel = label;
+        _connectionState = nextState;
       });
     }
   }
 
-  Future<void> _saveLocalMessages() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'chat_${widget.contactNameOrId}',
-      jsonEncode(_messages),
-    );
-  }
+  Future<void> _loadOlderMessages() async {
+    final roomId = _roomId;
+    if (roomId == null || _loadingMoreMessages || !_hasMore) return;
+    final cursor = _oldestMessageDoc;
+    if (cursor == null) return;
 
-  Future<void> _sendMessage() async {
-    final text = _controller.text.trim();
-    if (text.isEmpty) return;
-
-    _controller.clear();
-
-    if (_useFirestore && _roomId != null) {
-      try {
-        final encrypted =
-            _crypto.encryptForRoom(roomId: _roomId!, plainText: text);
-        await ChatApiService.sendTextMessage(roomId: _roomId!, text: encrypted);
-      } catch (_) {
-        if (mounted) _showBanner('Error al enviar mensaje', Colors.redAccent);
-      }
-      return;
-    }
-
+    _loadingMoreMessages = true;
     try {
-      // Fallback local cifrado con clave de dispositivo segura e IV aleatorio.
-      final encrypted = _crypto.encryptLocal(text);
+      final snap = await _runWithFirestoreRetry(() {
+        return _db
+            .collection('messages')
+            .where('roomId', isEqualTo: roomId)
+            .orderBy('timestamp', descending: true)
+            .startAfterDocument(cursor)
+            .limit(_pageSize)
+            .get();
+      });
+
+      if (snap.docs.isNotEmpty) {
+        _oldestMessageDoc = snap.docs.last;
+      }
+
+      final uid = _currentUserId;
+      final olderBatch = snap.docs.reversed.map((doc) {
+        return _messageFromDoc(doc, currentUserId: uid);
+      }).where((msg) {
+        final id = (msg['id'] ?? '').toString();
+        return id.isNotEmpty && !_hiddenMessageIds.contains(id);
+      }).toList();
+
       if (!mounted) return;
-      await _addLocalMessage({
-        'text': encrypted,
-        'fromMe': true,
-        'timestamp': DateTime.now().toIso8601String(),
+      setState(() {
+        final existingIds = _messages
+            .map((m) => (m['id'] ?? '').toString())
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        final toInsert = olderBatch
+            .where((m) => !existingIds.contains((m['id'] ?? '').toString()))
+            .toList();
+        _messages = [...toInsert, ..._messages];
+        _hasMore = snap.docs.length == _pageSize;
       });
     } catch (_) {
-      if (mounted) {
-        _showBanner('No se pudo cifrar el mensaje local', Colors.redAccent);
-      }
+      // Retry helper already attempted; keep UX silent for intermittent links.
+    } finally {
+      _loadingMoreMessages = false;
     }
   }
 
-  // ================= FILE =================
-
-  Future<void> _sendFile() async {
-    setState(() => _sendingFile = true);
-
+  Future<void> _loadLegacyMessagesOnce(String roomId) async {
     try {
-      final result = await FilePicker.platform.pickFiles();
-      if (result?.files.single.path != null) {
-        final file = result!.files.single;
-        await _sendOrStoreMedia(
-          localPath: file.path!,
-          type: 'file',
-          fileName: file.name,
+      final snap = await _runWithFirestoreRetry(() {
+        return _db
+            .collection('chatRooms')
+            .doc(roomId)
+            .collection('messages')
+            .orderBy('timestamp', descending: true)
+            .limit(_pageSize)
+            .get();
+      });
+
+      final uid = _currentUserId;
+      final legacy = snap.docs.reversed.map((doc) {
+        final data = doc.data();
+        final senderId = (data['senderId'] ?? '').toString();
+        final rawText = (data['text'] ?? '').toString();
+        final normalizedType = (data['type'] ?? 'text').toString();
+        final metadata = (data['metadata'] as Map<String, dynamic>?) ??
+            const <String, dynamic>{};
+
+        return {
+          ...data,
+          'id': doc.id,
+          'fromMe': senderId == uid,
+          'userId': senderId,
+          'userName': senderId == uid ? 'Tu' : 'Contacto',
+          'text': _decodeStoredText(rawText),
+          'type': normalizedType,
+          'replyTo': metadata['replyTo'],
+          'replyToText': metadata['replyToText'],
+          'attachment': _decodeNullableCipher(data['fileUrl']) ??
+              _decodeNullableCipher(data['audioUrl']),
+          'status': _statusForMessage(
+            fromMe: senderId == uid,
+            timestamp: data['timestamp'] as Timestamp?,
+            fallbackType: normalizedType,
+          ),
+        };
+      }).where((msg) {
+        final id = (msg['id'] ?? '').toString();
+        return id.isNotEmpty && !_hiddenMessageIds.contains(id);
+      }).toList();
+
+      if (!mounted || legacy.isEmpty) return;
+      setState(() {
+        if (_messages.isEmpty) {
+          _messages = legacy;
+          _hasMore = snap.docs.length == _pageSize;
+        }
+      });
+    } catch (_) {
+      // Legacy fallback is best-effort only.
+    }
+  }
+
+  Map<String, dynamic> _messageFromDoc(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc, {
+    required String currentUserId,
+  }) {
+    final data = doc.data();
+    final senderId = (data['senderId'] ?? '').toString();
+    final rawText = (data['text'] ?? '').toString();
+    final normalizedType = (data['type'] ?? 'text').toString();
+    final metadata = (data['metadata'] as Map<String, dynamic>?) ??
+        const <String, dynamic>{};
+    final resolvedTimestamp = _messageTimestamp(data);
+    final isFromMe = senderId == currentUserId;
+
+    final replyToTextRaw = _nullableString(metadata['replyToText']);
+    final replyToTextDecoded =
+        replyToTextRaw == null ? null : _decodeStoredText(replyToTextRaw);
+
+    return {
+      ...data,
+      'timestamp': resolvedTimestamp,
+      'id': doc.id,
+      'fromMe': isFromMe,
+      'userId': senderId,
+      'userName': isFromMe ? 'Tu' : 'Contacto',
+      'text': _decodeStoredText(rawText),
+      'type': normalizedType,
+      'replyTo': metadata['replyTo'],
+      'replyToText': replyToTextDecoded,
+      'attachment': _decodeNullableCipher(data['fileUrl']) ??
+          _decodeNullableCipher(data['audioUrl']),
+      'status': _statusForMessage(
+        fromMe: isFromMe,
+        timestamp: resolvedTimestamp,
+        fallbackType: normalizedType,
+        hasPendingWrites: doc.metadata.hasPendingWrites,
+      ),
+    };
+  }
+
+  Timestamp? _messageTimestamp(Map<String, dynamic> data) {
+    return data['timestamp'] as Timestamp? ?? data['createdAt'] as Timestamp?;
+  }
+
+  DateTime? _extractTimestamp(Map<String, dynamic> message) {
+    final ts = message['timestamp'] as Timestamp?;
+    return ts?.toDate();
+  }
+
+  String? _decodeNullableCipher(Object? value) {
+    final raw = _nullableString(value);
+    if (raw == null) return null;
+    return _decodeStoredText(raw);
+  }
+
+  List<Map<String, dynamic>> _trimForLargeChats(
+      List<Map<String, dynamic>> src) {
+    if (src.length <= _maxInMemoryMessages) return src;
+    return src.sublist(src.length - _maxInMemoryMessages);
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
         );
       }
-    } catch (e) {
-      _showBanner('Error al seleccionar archivo', Colors.red);
+    });
+  }
+
+  String _decodeStoredText(String rawText) {
+    final value = rawText.trim();
+    if (value.isEmpty) return '';
+
+    // Formato actual en esta pantalla: e2er1:texto_plano
+    const plainMarker = 'e2er1:';
+    if (value.startsWith(plainMarker) && value.split(':').length == 2) {
+      return value.substring(plainMarker.length);
     }
 
-    if (mounted) {
-      setState(() => _sendingFile = false);
+    final roomId = _roomId;
+    if (roomId != null && roomId.isNotEmpty) {
+      // Soporta payload moderno del servicio E2E: e2er1:iv:cipher
+      final decryptedMarked =
+          _crypto.decryptForRoom(roomId: roomId, cipherText: value);
+      if (decryptedMarked != value) {
+        return decryptedMarked;
+      }
+
+      // Soporta payload legacy sin marcador: iv:cipher
+      if (_looksLikeLegacyIvCipher(value)) {
+        final wrapped = 'e2er1:$value';
+        final decryptedLegacy =
+            _crypto.decryptForRoom(roomId: roomId, cipherText: wrapped);
+        if (decryptedLegacy != wrapped && decryptedLegacy != value) {
+          return decryptedLegacy;
+        }
+      }
     }
-  }
 
-  Future<String> _buildLocalMediaPath(String extension) async {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final safeContactId =
-        widget.contactNameOrId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-    return '${Directory.systemTemp.path}${Platform.pathSeparator}orbit_${safeContactId}_$timestamp.$extension';
-  }
-
-  String _fileNameFromPath(String path) {
-    final parts = path.split(RegExp(r'[\\/]'));
-    return parts.isEmpty ? path : parts.last;
-  }
-
-  String _formatDuration(Duration duration) {
-    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
-  }
-
-  String _formatMessageTime(String? iso) {
-    if (iso == null) return '';
+    // Soporta payload local del servicio: e2el1:iv:cipher
     try {
-      final dt = DateTime.parse(iso).toLocal();
-      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+      final local = _crypto.decryptLocal(value);
+      if (local != value) return local;
     } catch (_) {
-      return '';
+      // Cifrado local no inicializado o payload inválido.
     }
+
+    // Evitar mostrar crudo un payload cifrado no compatible.
+    if (_looksLikeCipherPayload(value)) {
+      return 'Mensaje cifrado';
+    }
+
+    return rawText;
   }
 
-  bool _shouldShowDateSeparator(int index) {
-    if (index == 0) return true;
-    final prev = _messages[index - 1]['timestamp'] as String?;
-    final curr = _messages[index]['timestamp'] as String?;
-    if (prev == null || curr == null) return false;
+  bool _looksLikeLegacyIvCipher(String value) {
+    final parts = value.split(':');
+    if (parts.length != 2) return false;
+    return _isBase64(parts[0]) && _isBase64(parts[1]);
+  }
+
+  bool _looksLikeCipherPayload(String value) {
+    if (_looksLikeLegacyIvCipher(value)) return true;
+    if (value.startsWith('e2er2:') || value.startsWith('e2el2:')) {
+      final parts = value.split(':');
+      if (parts.length == 6) {
+        return _isBase64(parts[3]) &&
+            _isBase64(parts[4]) &&
+            _isBase64(parts[5]);
+      }
+      return true;
+    }
+    if (value.startsWith('e2er1:') || value.startsWith('e2el1:')) {
+      final parts = value.split(':');
+      if (parts.length >= 3) {
+        return _isBase64(parts[1]) && _isBase64(parts.sublist(2).join(':'));
+      }
+    }
+    return false;
+  }
+
+  bool _isBase64(String text) {
+    final t = text.trim();
+    if (t.isEmpty) return false;
     try {
-      final a = DateTime.parse(prev).toLocal();
-      final b = DateTime.parse(curr).toLocal();
-      return a.day != b.day || a.month != b.month || a.year != b.year;
+      base64Decode(t);
+      return true;
     } catch (_) {
       return false;
     }
   }
 
-  Widget _buildDateSeparator(String? iso) {
-    String label = 'Hoy';
-    if (iso != null) {
-      try {
-        final dt = DateTime.parse(iso).toLocal();
-        final now = DateTime.now();
-        final diff = DateTime(now.year, now.month, now.day)
-            .difference(DateTime(dt.year, dt.month, dt.day))
-            .inDays;
-        if (diff == 1) {
-          label = 'Ayer';
-        } else if (diff > 1) {
-          label =
-              '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
-        }
-      } catch (_) {}
+  String? _nullableString(Object? value) {
+    final v = (value ?? '').toString().trim();
+    return v.isEmpty ? null : v;
+  }
+
+  String _statusForMessage({
+    required bool fromMe,
+    required Timestamp? timestamp,
+    required String fallbackType,
+    bool hasPendingWrites = false,
+  }) {
+    if (!fromMe) return '';
+    if (hasPendingWrites) return 'sending';
+    if (timestamp == null) return 'sent';
+
+    final seenKey = 'lastSeen_$_remoteUserId';
+    final seenTs = _roomData?[seenKey] as Timestamp?;
+    if (seenTs != null) {
+      final msgTime = timestamp.toDate();
+      final seenTime = seenTs.toDate();
+      if (!msgTime.isAfter(seenTime)) {
+        return 'seen';
+      }
     }
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Row(
-        children: [
-          const Expanded(
-              child: Divider(color: Color(0xFF2A4E72), thickness: 0.5)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFF14324F),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: const Color(0xFF2A4E72)),
+
+    if (fallbackType == 'text' ||
+        fallbackType == 'image' ||
+        fallbackType == 'file') {
+      return 'delivered';
+    }
+    return 'sent';
+  }
+
+  Future<void> _markRoomAsRead({bool force = false}) async {
+    await _scheduleReadReceiptFlush(force: force);
+  }
+
+  Future<void> _scheduleReadReceiptFlush({bool force = false}) async {
+    final roomId = _roomId;
+    if (roomId == null || _currentUserId.isEmpty) return;
+
+    final now = DateTime.now();
+    _pendingReadReceiptAt = now;
+
+    if (_readReceiptDebounceTimer != null) {
+      _readReceiptDebounceTimer!.cancel();
+    }
+
+    final elapsedSinceLastSend = _lastReadReceiptSentAt == null
+        ? null
+        : now.difference(_lastReadReceiptSentAt!).inMilliseconds;
+    final canSendNow =
+        force || elapsedSinceLastSend == null || elapsedSinceLastSend >= 5000;
+
+    if (!canSendNow) {
+      _readReceiptDebounceTimer = Timer(const Duration(seconds: 2), () {
+        unawaited(_flushReadReceipt());
+      });
+      return;
+    }
+
+    _readReceiptDebounceTimer = Timer(Duration.zero, () {
+      unawaited(_flushReadReceipt());
+    });
+  }
+
+  Future<void> _flushReadReceipt() async {
+    final roomId = _roomId;
+    final pendingAt = _pendingReadReceiptAt;
+    if (roomId == null || _currentUserId.isEmpty || pendingAt == null) return;
+    if (_markingRoomAsRead) return;
+
+    _markingRoomAsRead = true;
+
+    try {
+      await _db.collection('chatRooms').doc(roomId).set({
+        'unread_$_currentUserId': 0,
+        'lastReadAt_$_currentUserId': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      _lastReadReceiptSentAt = DateTime.now();
+    } catch (_) {
+      // Se reintentará en el próximo evento del stream/scroll.
+    } finally {
+      _markingRoomAsRead = false;
+    }
+  }
+
+  Future<void> _sendMessage() async {
+    final roomId = _roomId;
+    final text = _controller.text.trim();
+    if (roomId == null ||
+        text.isEmpty ||
+        _currentUserId.isEmpty ||
+        _remoteUserId.isEmpty) {
+      return;
+    }
+
+    final replySnapshot = _replyTo;
+    final pendingId = 'pending_${DateTime.now().microsecondsSinceEpoch}';
+
+    _controller.clear();
+
+    // Mostrar mensaje optimista inmediatamente.
+    setState(() {
+      _pendingMessages.add({
+        'id': pendingId,
+        'fromMe': true,
+        'senderId': _currentUserId,
+        'text': text,
+        'type': 'text',
+        'status': 'queued',
+        'timestamp': null,
+      });
+      _replyTo = null;
+    });
+    _scrollToBottom();
+
+    const maxAttempts = 3;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        _updatePendingMessageStatus(pendingId, 'sending');
+        final batch = _db.batch();
+        final msgRef = _db.collection('messages').doc();
+        final safeText =
+            _crypto.encryptForRoom(roomId: roomId, plainText: text);
+        final encryptedReplyText = replySnapshot == null
+            ? null
+            : _crypto.encryptForRoom(
+                roomId: roomId,
+                plainText: replySnapshot.text,
+              );
+
+        batch.set(msgRef, {
+          'roomId': roomId,
+          'senderId': _currentUserId,
+          'text': safeText,
+          'type': 'text',
+          'fileUrl': '',
+          'audioUrl': '',
+          'timestamp': FieldValue.serverTimestamp(),
+          'createdAt': FieldValue.serverTimestamp(),
+          'metadata': {
+            'replyTo': replySnapshot?.id,
+            'replyToText': encryptedReplyText,
+          },
+        });
+
+        if (_legacyMirrorEnabled) {
+          batch.set(
+            _db
+                .collection('chatRooms')
+                .doc(roomId)
+                .collection('messages')
+                .doc(msgRef.id),
+            {
+              'senderId': _currentUserId,
+              'text': safeText,
+              'type': 'text',
+              'fileUrl': '',
+              'audioUrl': '',
+              'timestamp': FieldValue.serverTimestamp(),
+              'metadata': {
+                'replyTo': replySnapshot?.id,
+                'replyToText': encryptedReplyText,
+              },
+            },
+          );
+        }
+
+        batch.update(_db.collection('chatRooms').doc(roomId), {
+          'lastMessage': 'Nuevo mensaje',
+          'lastMessageType': 'text',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'unread_$_remoteUserId': FieldValue.increment(1),
+        });
+
+        await _runWithFirestoreRetry(() => batch.commit()).timeout(
+          const Duration(seconds: 12),
+        );
+
+        if (!mounted) return; // lifecycle safety fix
+
+        // Éxito: quitar el optimista (el stream lo trae con id real).
+        setState(() {
+          _pendingMessages.removeWhere((m) => m['id'] == pendingId);
+        });
+        unawaited(_markRoomAsRead(force: true));
+        return;
+      } on TimeoutException catch (e) {
+        _updatePendingMessageStatus(pendingId, 'queued');
+        if (mounted) {
+          ErrorPresenter.showSnack(
+            context,
+            ErrorPresenter.humanize(e),
+            state: RealtimeUxState.timeout,
+            actionLabel: 'Reintentar',
+            onAction: () {
+              if (!mounted) return;
+              setState(() {
+                _pendingMessages.removeWhere((m) => m['id'] == pendingId);
+                _controller.text = text;
+              });
+            },
+          );
+        }
+      } catch (e) {
+        if (attempt == maxAttempts) {
+          if (mounted) {
+            setState(() {
+              final idx =
+                  _pendingMessages.indexWhere((m) => m['id'] == pendingId);
+              if (idx != -1) _pendingMessages[idx]['status'] = 'failed';
+            });
+            ErrorPresenter.showSnack(
+              context,
+              ErrorPresenter.humanize(
+                e,
+                fallback: 'No se pudo enviar el mensaje.',
               ),
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: Color(0xFF8ABBD8),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
+              state: RealtimeUxState.error,
+              actionLabel: 'Reintentar',
+              onAction: () {
+                if (!mounted) return;
+                setState(() {
+                  _pendingMessages.removeWhere((m) => m['id'] == pendingId);
+                  _controller.text = text;
+                });
+              },
+            );
+          }
+        } else {
+          _updatePendingMessageStatus(pendingId, 'queued');
+          await Future.delayed(
+              Duration(milliseconds: 600 * attempt)); // backoff simple
+          if (!mounted) return; // lifecycle safety fix
+        }
+      }
+    }
+  }
+
+  void _updatePendingMessageStatus(String pendingId, String status) {
+    if (!mounted) return;
+    setState(() {
+      final idx = _pendingMessages.indexWhere((m) => m['id'] == pendingId);
+      if (idx != -1) {
+        _pendingMessages[idx]['status'] = status;
+      }
+    });
+  }
+
+  Future<void> _pickAttachment() async {
+    final roomId = _roomId;
+    if (roomId == null || _currentUserId.isEmpty || _remoteUserId.isEmpty) {
+      return;
+    }
+
+    setState(() => _uploading = true);
+    try {
+      final result = await FilePicker.pickFiles(withData: true);
+      if (result == null || result.files.isEmpty) {
+        return;
+      }
+
+      final file = result.files.first;
+      final extension = (file.extension ?? '').toLowerCase();
+      if (!_allowedAttachmentExtensions.contains(extension)) {
+        if (!mounted) return;
+        ErrorPresenter.showSnack(
+          context,
+          'Tipo de archivo no permitido.',
+          state: RealtimeUxState.error,
+        );
+        return;
+      }
+
+      if (file.size > _maxAttachmentBytes) {
+        if (!mounted) return;
+        ErrorPresenter.showSnack(
+          context,
+          'El archivo supera 10 MB.',
+          state: RealtimeUxState.error,
+        );
+        return;
+      }
+
+      final storagePath =
+          'chatRooms/$roomId/attachments/${DateTime.now().millisecondsSinceEpoch}_${file.name}';
+      final ref = _storage.ref().child(storagePath);
+      final contentType = _contentTypeForExtension(extension);
+      final metadata = contentType == null
+          ? null
+          : SettableMetadata(contentType: contentType);
+
+      if (file.bytes != null) {
+        await _runWithFirestoreRetry(() => ref.putData(file.bytes!, metadata));
+      } else if (file.path != null) {
+        await _runWithFirestoreRetry(
+            () => ref.putFile(File(file.path!), metadata));
+      } else {
+        if (!mounted) return;
+        ErrorPresenter.showSnack(
+          context,
+          'No se pudo leer el archivo seleccionado.',
+          state: RealtimeUxState.error,
+        );
+        return;
+      }
+
+      final url = await _runWithFirestoreRetry(() => ref.getDownloadURL());
+      final encryptedUrl =
+          _crypto.encryptForRoom(roomId: roomId, plainText: url);
+      final text = _controller.text.trim();
+      final encryptedText = text.isEmpty
+          ? ''
+          : _crypto.encryptForRoom(roomId: roomId, plainText: text);
+      final messageType =
+          {'jpg', 'jpeg', 'png', 'gif', 'webp'}.contains(extension)
+              ? 'image'
+              : 'file';
+
+      final batch = _db.batch();
+      final msgRef = _db.collection('messages').doc();
+      final encryptedReplyText = _replyTo == null
+          ? null
+          : _crypto.encryptForRoom(roomId: roomId, plainText: _replyTo!.text);
+
+      batch.set(msgRef, {
+        'roomId': roomId,
+        'senderId': _currentUserId,
+        'text': encryptedText,
+        'type': messageType,
+        'fileUrl': encryptedUrl,
+        'audioUrl': '',
+        'timestamp': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'metadata': {
+          'fileName': file.name,
+          'fileSize': file.size,
+          'replyTo': _replyTo?.id,
+          'replyToText': encryptedReplyText,
+        },
+      });
+
+      if (_legacyMirrorEnabled) {
+        batch.set(
+          _db
+              .collection('chatRooms')
+              .doc(roomId)
+              .collection('messages')
+              .doc(msgRef.id),
+          {
+            'senderId': _currentUserId,
+            'text': encryptedText,
+            'type': messageType,
+            'fileUrl': encryptedUrl,
+            'audioUrl': '',
+            'timestamp': FieldValue.serverTimestamp(),
+            'metadata': {
+              'fileName': file.name,
+              'fileSize': file.size,
+              'replyTo': _replyTo?.id,
+              'replyToText': encryptedReplyText,
+            },
+          },
+        );
+      }
+
+      batch.update(_db.collection('chatRooms').doc(roomId), {
+        'lastMessage': messageType == 'image' ? 'Imagen' : 'Archivo',
+        'lastMessageType': messageType,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'unread_$_remoteUserId': FieldValue.increment(1),
+      });
+
+      await _runWithFirestoreRetry(() => batch.commit());
+
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        'Archivo enviado: ${file.name}',
+        state: RealtimeUxState.delivered,
+      );
+      _controller.clear();
+      setState(() => _replyTo = null);
+      unawaited(_markRoomAsRead(force: true));
+    } catch (e) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        ErrorPresenter.humanize(e, fallback: 'Error al subir archivo.'),
+        state: RealtimeUxState.error,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _uploading = false);
+      }
+    }
+  }
+
+  Future<String> _newAudioTempPath() async {
+    final dir = await getTemporaryDirectory();
+    return '${dir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.aac';
+  }
+
+  Future<void> _toggleRecordingAudio() async {
+    if (_isRecordingAudio) {
+      final path = await _recorder.stopRecorder();
+      if (!mounted) return;
+      _recordingTimer?.cancel();
+      final durationMs = _recordingSeconds * 1000;
+      setState(() => _isRecordingAudio = false);
+      if (path != null && path.trim().isNotEmpty) {
+        await _sendAudioMessage(path, durationMs: durationMs);
+      }
+      return;
+    }
+
+    final roomId = _roomId;
+    if (roomId == null || _currentUserId.isEmpty || _remoteUserId.isEmpty) {
+      ErrorPresenter.showSnack(
+        context,
+        'No se pudo iniciar la grabación.',
+        state: RealtimeUxState.error,
+      );
+      return;
+    }
+
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        'Permiso de micrófono denegado.',
+        state: RealtimeUxState.error,
+      );
+      return;
+    }
+
+    try {
+      final path = await _newAudioTempPath();
+      await _recorder.startRecorder(
+        toFile: path,
+        codec: Codec.aacADTS,
+      );
+      if (!mounted) return;
+      _recordingTimer?.cancel();
+      setState(() {
+        _isRecordingAudio = true;
+        _recordingSeconds = 0;
+      });
+      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        setState(() => _recordingSeconds++);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        ErrorPresenter.humanize(e, fallback: 'No se pudo grabar audio.'),
+        state: RealtimeUxState.error,
+      );
+    }
+  }
+
+  Future<void> _sendAudioMessage(String localPath,
+      {required int durationMs}) async {
+    final roomId = _roomId;
+    if (roomId == null || _currentUserId.isEmpty || _remoteUserId.isEmpty) {
+      return;
+    }
+
+    setState(() => _sendingAudio = true);
+    try {
+      final file = File(localPath);
+      final objectPath =
+          'chatRooms/$roomId/audio/${DateTime.now().millisecondsSinceEpoch}.aac';
+      final ref = _storage.ref().child(objectPath);
+      await _runWithFirestoreRetry(() => ref.putFile(
+            file,
+            SettableMetadata(contentType: 'audio/aac'),
+          ));
+      final audioUrl = await _runWithFirestoreRetry(() => ref.getDownloadURL());
+      final encryptedAudioUrl =
+          _crypto.encryptForRoom(roomId: roomId, plainText: audioUrl);
+
+      final batch = _db.batch();
+      final msgRef = _db.collection('messages').doc();
+      final encryptedReplyText = _replyTo == null
+          ? null
+          : _crypto.encryptForRoom(roomId: roomId, plainText: _replyTo!.text);
+
+      batch.set(msgRef, {
+        'roomId': roomId,
+        'senderId': _currentUserId,
+        'text': '',
+        'type': 'audio',
+        'fileUrl': '',
+        'audioUrl': encryptedAudioUrl,
+        'timestamp': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'metadata': {
+          'durationMs': durationMs,
+          'replyTo': _replyTo?.id,
+          'replyToText': encryptedReplyText,
+        },
+      });
+
+      if (_legacyMirrorEnabled) {
+        batch.set(
+          _db
+              .collection('chatRooms')
+              .doc(roomId)
+              .collection('messages')
+              .doc(msgRef.id),
+          {
+            'senderId': _currentUserId,
+            'text': '',
+            'type': 'audio',
+            'fileUrl': '',
+            'audioUrl': encryptedAudioUrl,
+            'timestamp': FieldValue.serverTimestamp(),
+            'metadata': {
+              'durationMs': durationMs,
+              'replyTo': _replyTo?.id,
+              'replyToText': encryptedReplyText,
+            },
+          },
+        );
+      }
+
+      batch.update(_db.collection('chatRooms').doc(roomId), {
+        'lastMessage': 'Nota de voz',
+        'lastMessageType': 'audio',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'unread_$_remoteUserId': FieldValue.increment(1),
+      });
+
+      await _runWithFirestoreRetry(() => batch.commit());
+      if (!mounted) return;
+      setState(() => _replyTo = null);
+      unawaited(_markRoomAsRead(force: true));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo enviar audio: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _sendingAudio = false);
+    }
+  }
+
+  Future<void> _showContactInfo() async {
+    if (_remoteUserId.isEmpty) return;
+
+    try {
+      final snap =
+          await _db.collection('users_public').doc(_remoteUserId).get();
+      final data = snap.data() ?? const <String, dynamic>{};
+      final fullName =
+          ((data['fullName'] ?? data['displayName'] ?? 'Sin nombre') as Object)
+              .toString()
+              .trim();
+      final orbitNumber =
+          ((data['orbitNumber'] ?? '') as Object).toString().trim();
+      final accountType =
+          ((data['accountType'] ?? '') as Object).toString().trim();
+
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Informacion del contacto'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _infoRow('Nombre', fullName.isEmpty ? 'Sin nombre' : fullName),
+              if (orbitNumber.isNotEmpty) _infoRow('Code Orbit', orbitNumber),
+              if (accountType.isNotEmpty) _infoRow('Tipo', accountType),
+              _infoRow('UID', _remoteUserId),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cerrar'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo cargar el contacto: $e')),
+      );
+    }
+  }
+
+  String? _contentTypeForExtension(String extension) {
+    switch (extension.toLowerCase()) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'mp3':
+        return 'audio/mpeg';
+      case 'm4a':
+        return 'audio/mp4';
+      case 'wav':
+        return 'audio/wav';
+      case 'ogg':
+        return 'audio/ogg';
+      case 'mp4':
+        return 'video/mp4';
+      default:
+        return null;
+    }
+  }
+
+  String _formatRecordingDuration(int totalSeconds) {
+    final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  void _startVoiceCall() {
+    if (_remoteUserId.isEmpty) return;
+    final knownName = (_contactName ?? widget.initialContactName ?? '').trim();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => VideoCallScreen(
+          remoteUserId: _remoteUserId,
+          initialRemoteDisplayName: knownName.isEmpty ? null : knownName,
+          isCaller: true,
+          audioOnly: true,
+        ),
+      ),
+    );
+  }
+
+  void _showMessageMenu(Map<String, dynamic> msg) {
+    setState(() => _selectedMessageId = msg['id']);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 12)],
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(top: 10, bottom: 8),
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-            ),
+              const Divider(height: 1),
+              if ((msg['text'] ?? '').toString().isNotEmpty)
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  child: Row(
+                    children: [
+                      Icon(Icons.message_outlined,
+                          size: 15, color: Colors.grey[400]),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          (msg['text'] ?? '').toString(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              TextStyle(color: Colors.grey[500], fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const Divider(height: 1),
+              if (msg['fromMe'] == true)
+                ..._sentActions(ctx, msg)
+              else
+                ..._receivedActions(ctx, msg),
+              const SizedBox(height: 8),
+            ],
           ),
-          const Expanded(
-              child: Divider(color: Color(0xFF2A4E72), thickness: 0.5)),
+        ),
+      ),
+    ).whenComplete(() {
+      if (mounted) setState(() => _selectedMessageId = null);
+    });
+  }
+
+  List<Widget> _sentActions(BuildContext ctx, Map<String, dynamic> msg) {
+    return [
+      _menuItem(ctx, Icons.copy_outlined, 'Copiar', () {
+        Navigator.pop(ctx);
+        _copyMessage((msg['text'] ?? '').toString());
+      }),
+      _menuItem(ctx, Icons.delete_outline, 'Eliminar para mi', () {
+        Navigator.pop(ctx);
+        _deleteForMe((msg['id'] ?? '').toString());
+      }, color: Colors.red),
+      _menuItem(ctx, Icons.info_outline, 'Info del mensaje', () {
+        Navigator.pop(ctx);
+        _showMessageInfo(msg);
+      }),
+    ];
+  }
+
+  List<Widget> _receivedActions(BuildContext ctx, Map<String, dynamic> msg) {
+    return [
+      _menuItem(ctx, Icons.copy_outlined, 'Copiar', () {
+        Navigator.pop(ctx);
+        _copyMessage((msg['text'] ?? '').toString());
+      }),
+      _menuItem(
+          ctx, Icons.reply_outlined, 'Responder', () => _startReply(msg, ctx)),
+      _menuItem(ctx, Icons.delete_outline, 'Eliminar para mi', () {
+        Navigator.pop(ctx);
+        _deleteForMe((msg['id'] ?? '').toString());
+      }, color: Colors.red),
+    ];
+  }
+
+  Widget _menuItem(
+    BuildContext ctx,
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    Color? color,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: color ?? Colors.grey[700]),
+            const SizedBox(width: 16),
+            Text(label,
+                style: TextStyle(fontSize: 15, color: color ?? Colors.black87)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _copyMessage(String text) {
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Mensaje copiado'), duration: Duration(seconds: 1)));
+  }
+
+  void _deleteForMe(String id) {
+    if (id.isEmpty) return;
+    setState(() {
+      _hiddenMessageIds.add(id);
+      _messages = _messages.where((msg) => msg['id'] != id).toList();
+    });
+  }
+
+  void _startReply(Map<String, dynamic> msg, BuildContext ctx) {
+    Navigator.pop(ctx);
+    setState(() {
+      _replyTo = MessageEntity(
+        id: (msg['id'] ?? '').toString(),
+        text: (msg['text'] ?? '').toString(),
+        userId: (msg['userId'] ?? '').toString(),
+        userName: (msg['userName'] ?? '').toString(),
+        userAvatar: '',
+        createdAt: DateTime.now(),
+        status: (msg['status'] ?? 'delivered').toString(),
+      );
+      _selectedMessageId = null;
+    });
+  }
+
+  void _showMessageInfo(Map<String, dynamic> msg) {
+    final timestamp = msg['timestamp'] as Timestamp?;
+    final sentAt = timestamp?.toDate();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Info del mensaje'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _infoRow('Estado', (msg['status'] ?? 'sent').toString()),
+            _infoRow('Tipo', (msg['type'] ?? 'text').toString()),
+            _infoRow(
+              'Enviado',
+              sentAt == null
+                  ? 'Pendiente'
+                  : '${sentAt.day.toString().padLeft(2, '0')}/${sentAt.month.toString().padLeft(2, '0')} ${sentAt.hour.toString().padLeft(2, '0')}:${sentAt.minute.toString().padLeft(2, '0')}',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
         ],
       ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(children: [
+        Text('$label: ', style: const TextStyle(fontWeight: FontWeight.bold)),
+        Flexible(child: Text(value)),
+      ]),
+    );
+  }
+
+  Widget _buildDateSeparator(DateTime date) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    final day = DateTime(date.year, date.month, date.day);
+
+    final String label;
+    if (day == today) {
+      label = 'Hoy';
+    } else if (day == yesterday) {
+      label = 'Ayer';
+    } else {
+      label =
+          '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+    }
+
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.grey[300],
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(label,
+            style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+      ),
+    );
+  }
+
+  Widget _buildMessagesList() {
+    if (_initializing) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_messages.isEmpty) {
+      return _buildEmptyState();
+    }
+
+    final List<Widget> items = [];
+    DateTime? lastDay;
+
+    for (final msg in _messages) {
+      final timestamp = msg['timestamp'] as Timestamp?;
+      final date = timestamp?.toDate();
+
+      if (date != null) {
+        final day = DateTime(date.year, date.month, date.day);
+        if (lastDay == null || day != lastDay) {
+          items.add(_buildDateSeparator(date));
+          lastDay = day;
+        }
+      }
+
+      final timeLabel = date != null
+          ? '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}'
+          : null;
+
+      items.add(ChatBubble(
+        text: ((msg['text'] ?? '').toString().trim().isEmpty &&
+                (msg['type'] ?? '').toString() == 'audio')
+            ? 'Nota de voz'
+            : (msg['text'] ?? '').toString(),
+        fromMe: msg['fromMe'] == true,
+        userName: (msg['fromMe'] == true) ? null : (_contactName ?? 'Contacto'),
+        userAvatar: '',
+        status: (msg['status'] ?? '').toString(),
+        attachmentUrl: msg['attachment']?.toString(),
+        messageType: (msg['type'] ?? 'text').toString(),
+        timeLabel: timeLabel,
+        reaction: null,
+        isHighlighted: _selectedMessageId == msg['id'],
+        onLongPress: () => _showMessageMenu(msg),
+      ));
+    }
+
+    return ListView(
+      controller: _scrollController,
+      padding: const EdgeInsets.all(8),
+      children: [
+        ...items,
+        // Mensajes optimistas (pending/failed) aún no llegados por el stream.
+        ..._pendingMessages.map((msg) {
+          final status = msg['status'] as String? ?? 'queued';
+          return ChatBubble(
+            text: (msg['text'] ?? '').toString(),
+            fromMe: true,
+            status: status,
+            messageType: (msg['type'] ?? 'text').toString(),
+            timeLabel: status == 'failed' ? '!' : '...',
+            reaction: null,
+            isHighlighted: false,
+          );
+        }),
+      ],
     );
   }
 
   Widget _buildEmptyState() {
+    if (_roomId == null) {
+      return Center(
+        child: Text(
+          'No fue posible abrir esta conversacion',
+          style: TextStyle(color: Colors.grey[600], fontSize: 16),
+        ),
+      );
+    }
+
     return Center(
+      child: Text(
+        'No hay mensajes',
+        style: TextStyle(color: Colors.grey[600], fontSize: 16),
+      ),
+    );
+  }
+
+  Widget _buildEmojiPicker() {
+    return SizedBox(
+      height: 300,
+      child: EmojiPicker(
+        onEmojiSelected: (category, emoji) {
+          setState(() {
+            _controller.text += emoji.emoji;
+            _controller.selection = TextSelection.fromPosition(
+              TextPosition(offset: _controller.text.length),
+            );
+            _showEmojiPicker = false;
+          });
+        },
+        config: const Config(),
+      ),
+    );
+  }
+
+  Widget _buildInputArea() {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: const Color(0xFF0D2138),
-              border: Border.all(color: const Color(0xFF1D3F5D), width: 2),
-            ),
-            child: const Icon(
-              Icons.chat_bubble_outline_rounded,
-              size: 48,
-              color: Color(0xFF2A6D9E),
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Ningún mensaje aún',
-            style: TextStyle(
-                color: Colors.white70,
-                fontSize: 16,
-                fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Escribe algo para iniciar la conversación',
-            style: TextStyle(color: Color(0xFF4A7498), fontSize: 13),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _startRecordingTicker() {
-    _recordingTicker?.cancel();
-    _recordingElapsed = Duration.zero;
-    final startedAt = DateTime.now();
-    _recordingTicker = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      if (!mounted || !_isRecording) return;
-      setState(() {
-        _recordingElapsed = DateTime.now().difference(startedAt);
-      });
-    });
-  }
-
-  void _stopRecordingTicker() {
-    _recordingTicker?.cancel();
-    _recordingTicker = null;
-  }
-
-  Future<void> _ensurePlayerReady() async {
-    if (_playerReady) return;
-    await _player.openPlayer();
-    _playerReady = true;
-  }
-
-  Future<void> _playAudioMessage(String path) async {
-    try {
-      await _ensurePlayerReady();
-
-      if (_activeAudioPath == path) {
-        await _player.stopPlayer();
-        if (!mounted) return;
-        setState(() => _activeAudioPath = null);
-        return;
-      }
-
-      await _player.stopPlayer();
-      await _player.startPlayer(
-        fromURI: path,
-        whenFinished: () {
-          if (!mounted) return;
-          setState(() => _activeAudioPath = null);
-        },
-      );
-
-      if (!mounted) return;
-      setState(() => _activeAudioPath = path);
-    } catch (_) {
-      if (mounted) {
-        _showBanner('No se pudo reproducir la nota de voz', Colors.redAccent);
-      }
-    }
-  }
-
-  Future<void> _captureImage() async {
-    try {
-      final picked = await _imagePicker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 85,
-      );
-      if (picked == null) return;
-
-      final targetPath = await _buildLocalMediaPath('jpg');
-      final savedFile = await File(picked.path).copy(targetPath);
-      await _sendOrStoreMedia(
-        localPath: savedFile.path,
-        type: 'image',
-        fileName: _fileNameFromPath(savedFile.path),
-      );
-    } catch (_) {
-      if (mounted) {
-        _showBanner('No se pudo tomar la foto', Colors.redAccent);
-      }
-    }
-  }
-
-  Future<void> _captureVideo() async {
-    try {
-      final picked = await _imagePicker.pickVideo(
-        source: ImageSource.camera,
-        maxDuration: const Duration(seconds: 30),
-      );
-      if (picked == null) return;
-
-      final targetPath = await _buildLocalMediaPath('mp4');
-      final savedFile = await File(picked.path).copy(targetPath);
-      await _sendOrStoreMedia(
-        localPath: savedFile.path,
-        type: 'video',
-        fileName: _fileNameFromPath(savedFile.path),
-      );
-    } catch (_) {
-      if (mounted) {
-        _showBanner('No se pudo grabar el video', Colors.redAccent);
-      }
-    }
-  }
-
-  // ================= AUDIO =================
-
-  Future<bool> _ensureRecorderReady() async {
-    if (_recorderReady) return true;
-
-    final status = await Permission.microphone.request();
-    if (!status.isGranted) {
-      if (mounted) {
-        _showBanner('Permiso de micrófono denegado', Colors.redAccent);
-      }
-      return false;
-    }
-
-    try {
-      await _recorder.openRecorder();
-      _recorderReady = true;
-      return true;
-    } catch (_) {
-      if (mounted) {
-        _showBanner('No se pudo inicializar el micrófono', Colors.redAccent);
-      }
-      return false;
-    }
-  }
-
-  Future<void> _toggleRecording() async {
-    if (_recorderBusy) return;
-    _recorderBusy = true;
-
-    try {
-      if (_isRecording) {
-        try {
-          final recordedDuration = _recordingElapsed;
-          final path = await _recorder.stopRecorder();
-          if (!mounted) return;
-          _stopRecordingTicker();
-          setState(() => _isRecording = false);
-
-          if (path != null) {
-            await _sendOrStoreMedia(
-              localPath: path,
-              type: 'audio',
-              fileName: 'nota_de_voz.aac',
-              durationMs: recordedDuration.inMilliseconds,
-            );
-          }
-        } catch (_) {
-          if (mounted) {
-            _showBanner('No se pudo detener la grabación', Colors.redAccent);
-            setState(() => _isRecording = false);
-          }
-          _stopRecordingTicker();
-        }
-      } else {
-        try {
-          final ready = await _ensureRecorderReady();
-          if (!ready) return;
-          final outputPath = await _buildLocalMediaPath('aac');
-          await _recorder.startRecorder(toFile: outputPath);
-          if (!mounted) return;
-          setState(() {
-            _isRecording = true;
-            _recordingElapsed = Duration.zero;
-          });
-          _startRecordingTicker();
-        } catch (_) {
-          if (mounted) {
-            _showBanner('No se pudo iniciar la grabación', Colors.redAccent);
-            setState(() => _isRecording = false);
-          }
-          _stopRecordingTicker();
-        }
-      }
-    } finally {
-      _recorderBusy = false;
-    }
-  }
-
-  // ================= UI =================
-
-  void _showBanner(String text, Color color) {
-    setState(() {
-      _banner = MaterialBanner(
-        content: Text(text, style: const TextStyle(color: Colors.white)),
-        backgroundColor: color,
-        actions: [
-          TextButton(
-            onPressed: () {
-              HapticFeedback.selectionClick();
-              setState(() => _banner = null);
-            },
-            child: const Text('Cerrar', style: TextStyle(color: Colors.white)),
-          )
-        ],
-      );
-    });
-
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _banner = null);
-    });
-  }
-
-  Widget _buildUploadStatus(Map<String, dynamic> msg, {String? mediaSource}) {
-    final isUploading = msg['isUploading'] == true;
-    final canRetry = msg['canRetryUpload'] == true;
-    final uploaded = !isUploading &&
-        !canRetry &&
-        msg['fromMe'] == true &&
-        mediaSource != null &&
-        _isRemoteSource(mediaSource);
-
-    if (!isUploading && !canRetry && !uploaded) {
-      return const SizedBox.shrink();
-    }
-
-    final progress = (msg['uploadProgress'] as num?)?.toDouble() ?? 0.0;
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (isUploading) ...[
-            SizedBox(
-              width: 170,
-              child: LinearProgressIndicator(value: progress),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Subiendo ${(progress * 100).toStringAsFixed(0)}%',
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
-            ),
-          ],
-          if (!isUploading && canRetry)
-            TextButton.icon(
-              onPressed: () {
-                unawaited(_retryUploadMessage(msg));
-              },
-              icon: const Icon(Icons.refresh, size: 16, color: Colors.white),
-              label: const Text(
-                'Reintentar subida',
-                style: TextStyle(color: Colors.white),
+          if (_replyTo != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(8),
               ),
-            ),
-          if (uploaded)
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: const [
-                Icon(Icons.check_circle, color: Colors.greenAccent, size: 14),
-                SizedBox(width: 6),
-                Text(
-                  'Subido',
-                  style: TextStyle(color: Colors.greenAccent, fontSize: 12),
-                ),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isCompact = MediaQuery.of(context).size.width < 380;
-
-    return Scaffold(
-      backgroundColor: const Color(0xFF091526),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF091526),
-        elevation: 0,
-        titleSpacing: 8,
-        title: GestureDetector(
-          onTap: () {
-            HapticFeedback.selectionClick();
-            showDialog(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                title: Text('Perfil de ${widget.contactNameOrId}'),
-                content: const Text(
-                    'Aquí se mostraría la información del contacto.'),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: const Text('Cerrar'),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Respondiendo a: ${_replyTo?.text ?? ''}',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black87,
+                          fontStyle: FontStyle.italic),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () => setState(() => _replyTo = null),
                   ),
                 ],
               ),
-            );
-          },
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
+            ),
+          Row(
             children: [
-              _ContactAvatar(name: widget.contactNameOrId, size: 36),
-              const SizedBox(width: 10),
-              Flexible(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      widget.contactNameOrId,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: _networkHintColor.withAlpha(35),
-                        borderRadius: BorderRadius.circular(999),
-                        border:
-                            Border.all(color: _networkHintColor.withAlpha(170)),
-                      ),
-                      child: Text(
-                        _networkHint,
-                        style: TextStyle(
-                          color: _networkHintColor,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
+              IconButton(
+                icon: Icon(
+                  _showEmojiPicker
+                      ? Icons.keyboard_outlined
+                      : Icons.emoji_emotions,
+                ),
+                onPressed: () {
+                  setState(() => _showEmojiPicker = !_showEmojiPicker);
+                },
+              ),
+              if (_isRecordingAudio)
+                Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedScale(
+                        scale: _recordingSeconds.isEven ? 1.0 : 1.22,
+                        duration: const Duration(milliseconds: 500),
+                        curve: Curves.easeInOut,
+                        child: AnimatedOpacity(
+                          opacity: _recordingSeconds.isEven ? 1.0 : 0.55,
+                          duration: const Duration(milliseconds: 500),
+                          child: const Icon(
+                            Icons.fiber_manual_record,
+                            size: 12,
+                            color: Colors.red,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 4),
+                      Text(
+                        _formatRecordingDuration(_recordingSeconds),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.red,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  maxLines: null,
+                  minLines: 1,
+                  keyboardType: TextInputType.multiline,
+                  textInputAction: TextInputAction.newline,
+                  decoration: InputDecoration(
+                    hintText: 'Escribe un mensaje...',
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.send),
+                      onPressed: _sendMessage,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide.none,
+                    ),
+                    filled: true,
+                    fillColor:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.attach_file),
+                onPressed: _pickAttachment,
+              ),
+              IconButton(
+                icon: const Icon(Icons.mic),
+                tooltip: _isRecordingAudio
+                    ? 'Detener y enviar audio'
+                    : 'Grabar audio',
+                color: _isRecordingAudio ? Colors.red : null,
+                onPressed: _sendingAudio ? null : _toggleRecordingAudio,
               ),
             ],
           ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.call_rounded),
-            tooltip: 'Llamada de voz',
-            onPressed: () {
-              HapticFeedback.selectionClick();
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => VideoCallScreen(
-                  remoteUserId: widget.contactNameOrId,
-                  audioOnly: true,
-                  isCaller: true,
-                ),
-              ));
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.videocam_rounded),
-            tooltip: 'Videollamada',
-            onPressed: () {
-              HapticFeedback.selectionClick();
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => VideoCallScreen(
-                  remoteUserId: widget.contactNameOrId,
-                  isCaller: true,
-                ),
-              ));
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.attach_file),
-            tooltip: 'Adjuntar archivo',
-            onPressed: _sendingFile
-                ? null
-                : () {
-                    HapticFeedback.selectionClick();
-                    unawaited(_sendFile());
-                  },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          if (_banner != null) _banner!,
-          if (_isRecording ||
-              (_messages.isNotEmpty && _messages.last['audioPath'] != null))
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: AudioRecordIndicator(
-                isRecording: _isRecording,
-                elapsed: _recordingElapsed,
-                audioPath:
-                    _messages.isNotEmpty ? _messages.last['audioPath'] : null,
-              ),
-            ),
-          Expanded(
-            child: _messages.isEmpty
-                ? _buildEmptyState()
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-                    itemCount: _messages.length,
-                    itemBuilder: (_, i) {
-                      final msg = _messages[i];
-                      final isMe = msg['fromMe'] == true;
-                      Widget Function(Widget) wrapSep =
-                          (w) => _shouldShowDateSeparator(i)
-                              ? Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    _buildDateSeparator(
-                                        msg['timestamp'] as String?),
-                                    w,
-                                  ],
-                                )
-                              : w;
-
-                      String text = msg['text'];
-                      try {
-                        if (_useFirestore && _roomId != null) {
-                          text = _crypto.decryptForRoom(
-                              roomId: _roomId!, cipherText: text);
-                        } else {
-                          text = _crypto.decryptLocal(text);
-                        }
-                      } catch (_) {}
-
-                      final mediaSource = _resolveMediaSource(msg);
-
-                      if (msg['mediaType'] == 'image' && mediaSource != null) {
-                        return wrapSep(Align(
-                          alignment: isMe
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: isMe
-                                  ? const Color(0xFF2E88D8)
-                                  : const Color(0xFF2B3850),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                GestureDetector(
-                                  onTap: () {
-                                    showDialog(
-                                      context: context,
-                                      builder: (_) => Dialog(
-                                        child: InteractiveViewer(
-                                          child: _isRemoteSource(mediaSource)
-                                              ? Image.network(mediaSource)
-                                              : Image.file(File(mediaSource)),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(10),
-                                    child: _isRemoteSource(mediaSource)
-                                        ? Image.network(
-                                            mediaSource,
-                                            width: 180,
-                                            height: 220,
-                                            fit: BoxFit.cover,
-                                          )
-                                        : Image.file(
-                                            File(mediaSource),
-                                            width: 180,
-                                            height: 220,
-                                            fit: BoxFit.cover,
-                                          ),
-                                  ),
-                                ),
-                                _buildUploadStatus(msg,
-                                    mediaSource: mediaSource),
-                              ],
-                            ),
-                          ),
-                        ));
-                      }
-
-                      if (msg['mediaType'] == 'video' && mediaSource != null) {
-                        return wrapSep(Align(
-                          alignment: isMe
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: isMe
-                                  ? const Color(0xFF2E88D8)
-                                  : const Color(0xFF2B3850),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(10),
-                                  child: _VideoPreview(
-                                    source: mediaSource,
-                                    isRemote: _isRemoteSource(mediaSource),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.videocam,
-                                        color: Colors.white),
-                                    const SizedBox(width: 8),
-                                    Flexible(
-                                      child: Text(
-                                        msg['fileName'] ?? 'Video grabado',
-                                        style: const TextStyle(
-                                            color: Colors.white),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                _buildUploadStatus(msg,
-                                    mediaSource: mediaSource),
-                              ],
-                            ),
-                          ),
-                        ));
-                      }
-
-                      if (msg['mediaType'] == 'file' && mediaSource != null) {
-                        return wrapSep(Align(
-                          alignment: isMe
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: isMe
-                                  ? const Color(0xFF2E88D8)
-                                  : const Color(0xFF2B3850),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.insert_drive_file,
-                                        color: Colors.white),
-                                    const SizedBox(width: 8),
-                                    Flexible(
-                                      child: Text(
-                                        msg['fileName'] ?? text,
-                                        style: const TextStyle(
-                                            color: Colors.white),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    IconButton(
-                                      icon: const Icon(Icons.open_in_new,
-                                          color: Colors.white),
-                                      tooltip: 'Abrir archivo',
-                                      onPressed: () {
-                                        HapticFeedback.selectionClick();
-                                        unawaited(_openAttachment(msg));
-                                      },
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.download,
-                                          color: Colors.white),
-                                      tooltip: 'Descargar archivo',
-                                      onPressed: () {
-                                        HapticFeedback.selectionClick();
-                                        unawaited(_downloadAttachment(msg));
-                                      },
-                                    ),
-                                  ],
-                                ),
-                                _buildUploadStatus(msg,
-                                    mediaSource: mediaSource),
-                              ],
-                            ),
-                          ),
-                        ));
-                      }
-
-                      if (msg['mediaType'] == 'audio' && mediaSource != null) {
-                        final audioDuration = Duration(
-                          milliseconds:
-                              (msg['durationMs'] as num?)?.toInt() ?? 0,
-                        );
-                        return wrapSep(Align(
-                          alignment: isMe
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: isMe
-                                  ? const Color(0xFF2E88D8)
-                                  : const Color(0xFF2B3850),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: Icon(
-                                    _activeAudioPath == mediaSource
-                                        ? Icons.stop
-                                        : Icons.play_arrow,
-                                    color: Colors.white,
-                                  ),
-                                  tooltip: 'Reproducir nota de voz',
-                                  onPressed: () {
-                                    HapticFeedback.selectionClick();
-                                    _playAudioMessage(mediaSource);
-                                  },
-                                ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text('Nota de voz',
-                                        style: TextStyle(color: Colors.white)),
-                                    Text(
-                                      _formatDuration(audioDuration),
-                                      style: const TextStyle(
-                                          color: Colors.white70, fontSize: 12),
-                                    ),
-                                    _buildUploadStatus(msg,
-                                        mediaSource: mediaSource),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ));
-                      }
-
-                      final _msgTime =
-                          _formatMessageTime(msg['timestamp'] as String?);
-                      return wrapSep(Align(
-                        alignment:
-                            isMe ? Alignment.centerRight : Alignment.centerLeft,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: MediaQuery.of(context).size.width * 0.75,
-                          ),
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 2),
-                            padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-                            decoration: BoxDecoration(
-                              color: isMe
-                                  ? const Color(0xFF1A6FC4)
-                                  : const Color(0xFF1B2E43),
-                              borderRadius: BorderRadius.only(
-                                topLeft: const Radius.circular(18),
-                                topRight: const Radius.circular(18),
-                                bottomLeft: Radius.circular(isMe ? 18 : 4),
-                                bottomRight: Radius.circular(isMe ? 4 : 18),
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withAlpha(40),
-                                  blurRadius: 6,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    text,
-                                    style: const TextStyle(
-                                        color: Colors.white, fontSize: 15),
-                                  ),
-                                ),
-                                const SizedBox(height: 3),
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      _msgTime,
-                                      style: const TextStyle(
-                                          color: Colors.white38, fontSize: 10),
-                                    ),
-                                    if (isMe) ...[
-                                      const SizedBox(width: 3),
-                                      const Icon(Icons.done_all,
-                                          size: 12, color: Color(0xFF4FC3F7)),
-                                    ],
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ));
-                    },
-                  ),
-          ),
-          Container(
-            margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-            padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0D2138),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFF264A6A)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withAlpha(30),
-                  blurRadius: 14,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    CameraIconButton(
-                      icon: _isRecording ? Icons.stop : Icons.mic,
-                      tooltip: _isRecording
-                          ? 'Detener grabación'
-                          : 'Grabar nota de voz',
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        unawaited(_toggleRecording());
-                      },
-                    ),
-                    CameraIconButton(
-                      icon: Icons.camera_alt,
-                      tooltip: 'Tomar foto',
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        unawaited(_captureImage());
-                      },
-                    ),
-                    CameraIconButton(
-                      icon: Icons.videocam,
-                      tooltip: 'Grabar video',
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        unawaited(_captureVideo());
-                      },
-                    ),
-                    if (!isCompact)
-                      CameraIconButton(
-                        icon: Icons.emoji_emotions,
-                        tooltip: 'Emojis/Stickers',
-                        onTap: () {
-                          HapticFeedback.selectionClick();
-                          _openEmojiPicker();
-                        },
-                      ),
-                    const SizedBox(width: 2),
-                    Expanded(
-                      child: TextField(
-                        controller: _controller,
-                        minLines: 1,
-                        maxLines: 4,
-                        decoration: InputDecoration(
-                          hintText: 'Escribe un mensaje...',
-                          filled: true,
-                          fillColor: const Color(0xFF122A43),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide:
-                                const BorderSide(color: Color(0xFF2A4E72)),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide:
-                                const BorderSide(color: Color(0xFF2A4E72)),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF36C0FF), Color(0xFF1E8DFF)],
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: CameraIconButton(
-                        icon: Icons.send,
-                        tooltip: 'Enviar mensaje',
-                        onTap: () {
-                          HapticFeedback.selectionClick();
-                          unawaited(_sendMessage());
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                if (isCompact)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: () {
-                        HapticFeedback.selectionClick();
-                        _openEmojiPicker();
-                      },
-                      icon: const Icon(Icons.emoji_emotions, size: 18),
-                      label: const Text('Emojis'),
-                    ),
-                  ),
-              ],
-            ),
-          ),
         ],
       ),
     );
-  }
-}
-
-class _ContactAvatar extends StatelessWidget {
-  final String name;
-  final double size;
-
-  const _ContactAvatar({required this.name, this.size = 38});
-
-  @override
-  Widget build(BuildContext context) {
-    final words = name.trim().split(RegExp(r'\s+'));
-    final initials = words.isEmpty
-        ? '?'
-        : words.take(2).map((w) => w.isEmpty ? '' : w[0].toUpperCase()).join();
-    return Container(
-      width: size,
-      height: size,
-      decoration: const BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          colors: [Color(0xFF2FA0FF), Color(0xFF1565C0)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        initials,
-        style: TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.bold,
-          fontSize: size * 0.36,
-        ),
-      ),
-    );
-  }
-}
-
-class _VideoPreview extends StatefulWidget {
-  final String source;
-  final bool isRemote;
-
-  const _VideoPreview({required this.source, required this.isRemote});
-
-  @override
-  State<_VideoPreview> createState() => _VideoPreviewState();
-}
-
-class _VideoPreviewState extends State<_VideoPreview> {
-  VideoPlayerController? _controller;
-  Future<void>? _initializeFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = widget.isRemote
-        ? VideoPlayerController.networkUrl(Uri.parse(widget.source))
-        : VideoPlayerController.file(File(widget.source));
-    _initializeFuture = _controller!.initialize();
   }
 
   @override
   void dispose() {
-    _controller?.dispose();
+    FCMService.setActiveChatPeer(null);
+    unawaited(_messagesResilient?.cancel());
+    unawaited(_roomResilient?.cancel());
+    _messagesSubscription?.cancel();
+    _roomSubscription?.cancel();
+    _recordingTimer?.cancel();
+    _readReceiptDebounceTimer?.cancel();
+    _scrollController.removeListener(_onScroll); // lifecycle safety fix
+    if (_isRecordingAudio) {
+      unawaited(_recorder.stopRecorder()); // lifecycle safety fix
+    }
+    unawaited(_recorder.closeRecorder()); // lifecycle safety fix
+    _controller.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  Future<void> _togglePlayback() async {
-    final controller = _controller;
-    if (controller == null) return;
+  Future<T> _runWithFirestoreRetry<T>(
+    Future<T> Function() action, {
+    int maxAttempts = 3,
+    Duration baseDelay = const Duration(milliseconds: 400),
+  }) async {
+    Object? lastError;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await action();
+      } on FirebaseException catch (e) {
+        lastError = e;
+        if (attempt == maxAttempts) break;
+      } on TimeoutException catch (e) {
+        lastError = e;
+        if (attempt == maxAttempts) break;
+      }
 
-    if (controller.value.isPlaying) {
-      await controller.pause();
-    } else {
-      await controller.play();
+      await Future.delayed(Duration(
+        milliseconds: baseDelay.inMilliseconds * attempt,
+      ));
     }
 
-    if (mounted) {
-      setState(() {});
-    }
+    throw lastError ?? StateError('Firestore operation failed');
   }
 
   @override
   Widget build(BuildContext context) {
-    final controller = _controller;
-    if (controller == null) {
-      return _buildFallback();
-    }
-
-    return FutureBuilder<void>(
-      future: _initializeFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return Container(
-            width: 220,
-            height: 140,
-            color: Colors.black.withValues(alpha: 0.25),
-            alignment: Alignment.center,
-            child: const CircularProgressIndicator(strokeWidth: 2),
-          );
-        }
-
-        if (snapshot.hasError) {
-          return _buildFallback();
-        }
-
-        return GestureDetector(
-          onTap: _togglePlayback,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox(
-                width: 220,
-                child: AspectRatio(
-                  aspectRatio: controller.value.aspectRatio == 0
-                      ? 16 / 9
-                      : controller.value.aspectRatio,
-                  child: VideoPlayer(controller),
-                ),
-              ),
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                  color: Colors.white,
-                  size: 30,
-                ),
-              ),
-            ],
+    return Scaffold(
+      appBar: AppBar(
+        title: InkWell(
+          onTap: _showContactInfo,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(child: Text(_contactTitle)),
+                const SizedBox(width: 6),
+                const Icon(Icons.info_outline, size: 18),
+              ],
+            ),
           ),
-        );
-      },
-    );
-  }
-
-  Widget _buildFallback() {
-    return Container(
-      width: 220,
-      height: 140,
-      color: Colors.black.withValues(alpha: 0.25),
-      alignment: Alignment.center,
-      child: const Icon(Icons.videocam, color: Colors.white, size: 32),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.call),
+            tooltip: 'Llamar',
+            onPressed: _startVoiceCall,
+          ),
+        ],
+      ),
+      floatingActionButton: _showScrollToBottomFab
+          ? FloatingActionButton.small(
+              onPressed: () {
+                setState(() {
+                  _isAtBottom = true;
+                  _showScrollToBottomFab = false;
+                });
+                _scrollController.animateTo(
+                  _scrollController.position.maxScrollExtent,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOut,
+                );
+              },
+              child: const Icon(Icons.keyboard_arrow_down),
+            )
+          : null,
+      body: Stack(
+        children: [
+          SafeArea(
+            top: false,
+            child: AbsorbPointer(
+              absorbing: _uploading,
+              child: Column(
+                children: [
+                  if (_connectionStateLabel.isNotEmpty)
+                    ErrorPresenter.buildStatusStrip(
+                      state: _connectionState,
+                      message: _connectionStateLabel,
+                      onRetry: () {
+                        _subscribeRoom();
+                        _subscribeMessages();
+                      },
+                    ),
+                  Expanded(child: _buildMessagesList()),
+                  if (_showEmojiPicker) _buildEmojiPicker(),
+                  _buildInputArea(),
+                ],
+              ),
+            ),
+          ),
+          if (_uploading)
+            Container(
+              color: Colors.black.withAlpha((0.6 * 255).toInt()),
+              child: const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 24),
+                    Text('Subiendo archivo, espera...',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

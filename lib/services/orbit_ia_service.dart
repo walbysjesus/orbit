@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'weather_service.dart';
 import 'network_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../ia_core/orbit_brain.dart';
 import '../ia_core/orbit_context.dart';
 import '../ia_core/decision_engine.dart';
@@ -10,9 +13,27 @@ import '../ia_executor.dart/chat_executor.dart';
 import '../ia_executor.dart/call_executor.dart';
 import '../ia_executor.dart/status_executor.dart';
 import '../ia_executor.dart/dashbord_executor.dart';
+import 'orbit_llm_service.dart';
+
+class OrbitIAResponse {
+  final String text;
+  final String source;
+  final String intent;
+  final int latencyMs;
+  final Map<String, dynamic> metadata;
+
+  OrbitIAResponse({
+    required this.text,
+    required this.source,
+    required this.intent,
+    required this.latencyMs,
+    Map<String, dynamic>? metadata,
+  }) : metadata = metadata ?? const {};
+}
 
 class OrbitIAService {
   static final OrbitBrain _brain = OrbitBrain();
+  static const String _memoryPrefix = 'orbit_ia_memory_v1_';
 
   /// Memoria viva por conversación (runtime)
   /// Esto evita que Orbit "olvide" entre mensajes
@@ -25,77 +46,264 @@ class OrbitIAService {
     required String conversationId,
     required String message,
   }) async {
+    final detailed = await sendMessageDetailed(
+      userId: userId,
+      conversationId: conversationId,
+      message: message,
+    );
+    return detailed.text;
+  }
+
+  static Future<OrbitIAResponse> sendMessageDetailed({
+    required String userId,
+    required String conversationId,
+    required String message,
+  }) async {
+    final total = Stopwatch()..start();
     final cleanMessage = message.trim();
 
     if (cleanMessage.isEmpty) {
-      return _emptyMessage();
+      total.stop();
+      return OrbitIAResponse(
+        text: _emptyMessage(),
+        source: 'empty_input',
+        intent: 'unknown',
+        latencyMs: total.elapsedMilliseconds,
+      );
     }
 
-    // 1️⃣ Estado de conversación persistente
-    final conversationState = _conversationStates.putIfAbsent(
-      conversationId,
-      () => ConversationState(
+    try {
+      // 1) Estado de conversación persistente
+      final conversationState = _conversationStates.putIfAbsent(
+        conversationId,
+        () => ConversationState(
+          conversationId: conversationId,
+          userId: userId,
+        ),
+      );
+      await _hydrateConversationState(conversationState);
+
+      // 2) Contexto cognitivo tolerante a fallos
+      final weatherCondition = await _safeWeather();
+      final networkQualityName = await _safeNetworkQualityName();
+      final latencyMs = await _safeLatencyMs();
+
+      final context = OrbitContext(
         conversationId: conversationId,
         userId: userId,
-      ),
-    );
+        shortTermMemory: conversationState.shortTermMemory.snapshot(),
+        longTermMemory: conversationState.longTermMemory.export(),
+        lastIntent: conversationState.activeIntent,
+        weatherCondition: weatherCondition,
+        networkQuality: networkQualityName,
+      );
+      context.rememberShortTerm('latencyMs', latencyMs);
+      context.rememberShortTerm(
+        'recommendedMode',
+        _recommendedMode(networkQualityName, latencyMs),
+      );
+      _learnFromMessage(context, cleanMessage);
 
-    // 2️⃣ Contexto cognitivo (lo que Orbit "sabe ahora")
+      // 3) La IA piensa
+      final decision = _brain.process(
+        message: cleanMessage,
+        context: context,
+      );
 
-    // Obtener clima real (ejemplo: lat/lon fijos, reemplazar por GPS real si se desea)
-    final weatherCondition = await WeatherService.getCurrentWeather(
-        lat: 19.4326, lon: -99.1332); // CDMX
-    final networkService = NetworkService();
-    final networkQuality = await networkService.getNetworkQuality();
-    final latencyMs = await networkService.measureLatencyMs();
+      // 4) Se actualiza estado cognitivo
+      conversationState.updateIntent(decision.intent.name);
+      conversationState.shortTermMemory.store('last_message', cleanMessage);
 
-    final context = OrbitContext(
-      conversationId: conversationId,
-      userId: userId,
-      shortTermMemory: conversationState.shortTermMemory.snapshot(),
-      longTermMemory: conversationState.longTermMemory.export(),
-      lastIntent: conversationState.activeIntent,
-      weatherCondition: weatherCondition,
-      networkQuality: networkQuality.name,
-    );
-    context.rememberShortTerm('latencyMs', latencyMs);
-    context.rememberShortTerm(
-      'recommendedMode',
-      _recommendedMode(networkQuality.name, latencyMs),
-    );
+      // 5) Se ejecuta lo decidido
+      final response = await _executeDecision(
+        intent: decision.intent.name,
+        message: cleanMessage,
+        context: context,
+      );
+      _syncContextToState(context, conversationState);
+      await _persistConversationState(conversationState);
+      total.stop();
+      return OrbitIAResponse(
+        text: response.text,
+        source: response.source,
+        intent: decision.intent.name,
+        latencyMs: total.elapsedMilliseconds,
+        metadata: {
+          ...response.metadata,
+          'networkQuality': context.networkQuality,
+          'weather': context.weatherCondition.name,
+        },
+      );
+    } catch (_) {
+      // Garantiza respuesta para que la UI no falle aunque haya errores internos.
+      total.stop();
+      return OrbitIAResponse(
+        text:
+            'Estoy teniendo una intermitencia técnica, pero sigo activo. Intenta de nuevo en unos segundos.',
+        source: 'error_fallback',
+        intent: 'unknown',
+        latencyMs: total.elapsedMilliseconds,
+      );
+    }
+  }
 
-    // 3️⃣ La IA PIENSA (NO responde)
-    final decision = _brain.process(
-      message: cleanMessage,
-      context: context,
-    );
+  static Future<void> _hydrateConversationState(ConversationState state) async {
+    if (state.shortTermMemory.recall('hydrated') == true) {
+      return;
+    }
 
-    // 4️⃣ Se actualiza el estado cognitivo
-    conversationState.updateIntent(decision.intent.name);
-    conversationState.shortTermMemory.store('last_message', cleanMessage);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('$_memoryPrefix${state.conversationId}');
+      if (raw == null || raw.isEmpty) {
+        state.shortTermMemory.store('hydrated', true);
+        return;
+      }
 
-    // 5️⃣ Se ejecuta lo decidido
-    return _executeDecision(
-      intent: decision.intent.name,
-      message: cleanMessage,
-      context: context,
-    );
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        state.shortTermMemory.store('hydrated', true);
+        return;
+      }
+
+      final shortTerm = decoded['shortTerm'];
+      if (shortTerm is Map<String, dynamic>) {
+        shortTerm.forEach((key, value) {
+          state.shortTermMemory.store(key, value);
+        });
+      }
+
+      final longTerm = decoded['longTerm'];
+      if (longTerm is Map<String, dynamic>) {
+        longTerm.forEach((key, value) {
+          state.longTermMemory.store(key, value);
+        });
+      }
+
+      final savedIntent = decoded['activeIntent'];
+      if (savedIntent is String && savedIntent.isNotEmpty) {
+        state.activeIntent = savedIntent;
+      }
+    } catch (_) {
+      // Si la memoria local falla, la IA sigue operando sin bloquear la respuesta.
+    } finally {
+      state.shortTermMemory.store('hydrated', true);
+    }
+  }
+
+  static Future<void> _persistConversationState(ConversationState state) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        '$_memoryPrefix${state.conversationId}',
+        jsonEncode(state.snapshot()),
+      );
+    } catch (_) {
+      // Persistencia best-effort.
+    }
+  }
+
+  static void _syncContextToState(
+    OrbitContext context,
+    ConversationState state,
+  ) {
+    context.shortTermMemory.forEach((key, value) {
+      state.shortTermMemory.store(key, value);
+    });
+    context.longTermMemory.forEach((key, value) {
+      state.longTermMemory.store(key, value);
+    });
+  }
+
+  static void _learnFromMessage(OrbitContext context, String message) {
+    final text = message.toLowerCase();
+
+    if (text.contains('transport') ||
+        text.contains('logistica') ||
+        text.contains('flota') ||
+        text.contains('entrega')) {
+      context.rememberLongTerm('business_sector', 'transportadora');
+    }
+
+    if (text.contains('costo') || text.contains('combustible')) {
+      context.rememberLongTerm('priority', 'costos');
+    } else if (text.contains('puntual') || text.contains('tiempo')) {
+      context.rememberLongTerm('priority', 'puntualidad');
+    } else if (text.contains('seguridad') || text.contains('riesgo')) {
+      context.rememberLongTerm('priority', 'seguridad');
+    }
+  }
+
+  static Future<WeatherCondition> _safeWeather() async {
+    try {
+      return await WeatherService.getCurrentWeather(lat: 19.4326, lon: -99.1332)
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {
+      return WeatherCondition.unknown;
+    }
+  }
+
+  static Future<String> _safeNetworkQualityName() async {
+    try {
+      final quality = await NetworkService()
+          .getNetworkQuality()
+          .timeout(const Duration(seconds: 2));
+      return quality.name;
+    } catch (_) {
+      return 'unknown';
+    }
+  }
+
+  static Future<int?> _safeLatencyMs() async {
+    try {
+      return await NetworkService()
+          .measureLatencyMs()
+          .timeout(const Duration(seconds: 2));
+    } catch (_) {
+      return null;
+    }
   }
 
   // -----------------------
   // EJECUCIÓN (PUENTE IA → SERVICIOS)
   // -----------------------
 
-  static Future<String> _executeDecision({
+  static Future<OrbitIAResponse> _executeDecision({
     required String intent,
     required String message,
     required OrbitContext context,
   }) async {
     switch (intent) {
       case 'chat':
-        return ChatExecutor().execute(
-          message: _defaultChatResponse(message, context),
+        final remoteResponse =
+            await OrbitLlmService.tryGenerateResponseDetailed(
+          message: message,
           context: context,
+        );
+        if (remoteResponse != null && remoteResponse.text.isNotEmpty) {
+          return OrbitIAResponse(
+            text: ChatExecutor().execute(
+              message: remoteResponse.text,
+              context: context,
+            ),
+            source: 'remote_llm',
+            intent: intent,
+            latencyMs: remoteResponse.latencyMs,
+            metadata: {
+              'provider': remoteResponse.provider,
+              'model': remoteResponse.model,
+            },
+          );
+        }
+
+        return OrbitIAResponse(
+          text: ChatExecutor().execute(
+            message: _defaultChatResponse(message, context),
+            context: context,
+          ),
+          source: 'local_fallback',
+          intent: intent,
+          latencyMs: 0,
         );
 
       case 'action':
@@ -103,23 +311,43 @@ class OrbitIAService {
           callType: 'default',
           context: context,
         );
-        return 'Accion ejecutada correctamente.\n${_networkAdvice(context)}';
+        return OrbitIAResponse(
+          text: 'Accion ejecutada correctamente.\n${_networkAdvice(context)}',
+          source: 'local_action',
+          intent: intent,
+          latencyMs: 0,
+        );
 
       case 'system':
         final status = StatusExecutor().execute(
           context: context,
         );
-        return _formatStatus(status, context);
+        return OrbitIAResponse(
+          text: _formatStatus(status, context),
+          source: 'local_system',
+          intent: intent,
+          latencyMs: 0,
+        );
 
       case 'dashboard':
         DashboardExecutor().execute(
           destination: 'default',
           context: context,
         );
-        return 'Navegación de dashboard preparada.';
+        return OrbitIAResponse(
+          text: 'Navegación de dashboard preparada.',
+          source: 'local_dashboard',
+          intent: intent,
+          latencyMs: 0,
+        );
 
       default:
-        return _fallbackResponse(message);
+        return OrbitIAResponse(
+          text: _fallbackResponse(message),
+          source: 'local_unknown',
+          intent: 'unknown',
+          latencyMs: 0,
+        );
     }
   }
 
@@ -137,7 +365,34 @@ class OrbitIAService {
   // -----------------------
 
   static String _defaultChatResponse(String message, OrbitContext context) {
-    return 'Entendido. Estoy procesando: "$message"\n${_networkAdvice(context)}';
+    final text = message.toLowerCase();
+    final sector = context.recall('business_sector')?.toString();
+    final priority = context.recall('priority')?.toString();
+
+    if (text.contains('empresa') ||
+        text.contains('transportadora') ||
+        text.contains('logistica') ||
+        text.contains('flota')) {
+      final priorityHint =
+          priority == null ? 'costos, puntualidad o seguridad' : priority;
+      return 'Para una empresa transportadora, Orbit IA sirve para: '
+          '1) priorizar el canal correcto segun señal (chat/voz/video), '
+          '2) guiar protocolos ante incidentes en ruta, '
+          '3) resumir novedades operativas por turno, '
+          '4) acelerar coordinacion entre conductor, despacho y cliente, '
+          '5) registrar aprendizaje operativo para responder mejor cada semana. '
+          'Con lo que me has contado, puedo enfocarme en $priorityHint.\n${_networkAdvice(context)}';
+    }
+
+    if (text.contains('aprender') || text.contains('mejorar')) {
+      final learned = sector ?? 'tu operación';
+      return 'Sí. Estoy aprendiendo progresivamente sobre $learned en esta conversación: '
+          'sector, prioridades y contexto de red/clima para afinar recomendaciones.';
+    }
+
+    return 'Entendido: "$message". '
+        'Puedo darte una recomendacion operativa concreta y accionable en menos de 1 minuto.\n'
+        '${_networkAdvice(context)}';
   }
 
   static String _emptyMessage() {

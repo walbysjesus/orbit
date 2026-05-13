@@ -58,7 +58,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF001F3F), // Azul Orbit
+      backgroundColor: const Color(0xFFFFFFFF),
       floatingActionButton: const LanguageFab(),
       body: SafeArea(
         child: Center(
@@ -75,7 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       'ORBIT',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Colors.white,
+                        color: Color(0xFF0A4D8F),
                         fontSize: 40,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 3,
@@ -86,7 +86,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       'Conecta más allá del planeta',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Colors.white70,
+                        color: Color(0xFF5A7388),
                         fontSize: 16,
                       ),
                     ),
@@ -97,23 +97,25 @@ class _LoginScreenState extends State<LoginScreen> {
                       keyboardType: TextInputType.emailAddress,
                       decoration: InputDecoration(
                         labelText: 'Correo electrónico',
-                        labelStyle: const TextStyle(color: Colors.white),
+                        labelStyle: const TextStyle(color: Color(0xFF5A7388)),
                         prefixIcon:
-                            const Icon(Icons.email, color: Colors.white70),
+                            const Icon(Icons.email, color: Color(0xFF5A7388)),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(30),
-                          borderSide: const BorderSide(color: Colors.white38),
+                          borderSide:
+                              const BorderSide(color: Color(0xFFBCD8EE)),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(30),
-                          borderSide: const BorderSide(color: Colors.white),
+                          borderSide:
+                              const BorderSide(color: Color(0xFF0A4D8F)),
                         ),
                         errorBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(30),
                           borderSide: const BorderSide(color: Colors.redAccent),
                         ),
                       ),
-                      style: const TextStyle(color: Colors.white),
+                      style: const TextStyle(color: Color(0xFF123A5B)),
                       validator: (value) {
                         if (value == null || value.isEmpty)
                           return 'Campo requerido';
@@ -131,16 +133,18 @@ class _LoginScreenState extends State<LoginScreen> {
                       obscureText: _obscurePassword,
                       decoration: InputDecoration(
                         labelText: 'Contraseña',
-                        labelStyle: const TextStyle(color: Colors.white),
+                        labelStyle: const TextStyle(color: Color(0xFF5A7388)),
                         prefixIcon:
-                            const Icon(Icons.lock, color: Colors.white70),
+                            const Icon(Icons.lock, color: Color(0xFF5A7388)),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(30),
-                          borderSide: const BorderSide(color: Colors.white38),
+                          borderSide:
+                              const BorderSide(color: Color(0xFFBCD8EE)),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(30),
-                          borderSide: const BorderSide(color: Colors.white),
+                          borderSide:
+                              const BorderSide(color: Color(0xFF0A4D8F)),
                         ),
                         errorBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(30),
@@ -151,7 +155,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               _obscurePassword
                                   ? Icons.visibility_off
                                   : Icons.visibility,
-                              color: Colors.white),
+                              color: Color(0xFF0A4D8F)),
                           tooltip: _obscurePassword
                               ? 'Mostrar contraseña'
                               : 'Ocultar contraseña',
@@ -159,7 +163,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               () => _obscurePassword = !_obscurePassword),
                         ),
                       ),
-                      style: const TextStyle(color: Colors.white),
+                      style: const TextStyle(color: Color(0xFF123A5B)),
                       validator: (value) {
                         if (value == null || value.isEmpty)
                           return 'Campo requerido';
@@ -184,7 +188,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         },
                         child: const Text(
                           '¿Olvidaste tu contraseña?',
-                          style: TextStyle(color: Colors.white70),
+                          style: TextStyle(color: Color(0xFF0A4D8F)),
                         ),
                       ),
                     ),
@@ -196,7 +200,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: ElevatedButton(
                         onPressed: _isLoading ? null : _login,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF3389FF),
+                          backgroundColor: const Color(0xFF0A4D8F),
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(30),
@@ -221,7 +225,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: const Text(
                         '¿No tienes cuenta? Regístrate',
                         style: TextStyle(
-                            color: Colors.white70,
+                            color: Color(0xFF0A4D8F),
                             decoration: TextDecoration.underline),
                       ),
                     ),

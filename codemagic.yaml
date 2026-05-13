@@ -1,0 +1,112 @@
+workflows:
+  android-release:
+    name: Orbit Android Release
+    max_build_duration: 60
+    instance_type: linux_x2
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+      cancel_previous_builds: true
+
+    environment:
+      flutter: stable
+      java: 17
+      vars:
+        APP_NAME: Orbit
+      # Create these in Codemagic Team settings > Environment variables.
+      # CM_ANDROID_KEYSTORE_BASE64
+      # CM_ANDROID_KEYSTORE_PASSWORD
+      # CM_ANDROID_KEY_ALIAS
+      # CM_ANDROID_KEY_PASSWORD
+
+    cache:
+      cache_paths:
+        - $CM_BUILD_DIR/.dart_tool
+        - $HOME/.pub-cache
+        - $HOME/.gradle/caches
+        - $HOME/.gradle/wrapper
+
+    scripts:
+      - name: Flutter Version
+        script: |
+          set -e
+          flutter --version
+
+      - name: Install Dependencies
+        script: |
+          set -e
+          flutter pub get
+
+      - name: Dependency Vulnerability Scan (OSV)
+        script: |
+          set -e
+          dart pub global activate osv_scanner
+          export PATH="$PATH":"$HOME/.pub-cache/bin"
+          osv_scanner --lockfile=pubspec.lock --recursive .
+
+      - name: Static Analysis
+        script: |
+          set -e
+          flutter analyze
+
+      - name: Automated Tests
+        script: |
+          set -e
+          flutter test --reporter expanded
+
+      - name: Prepare Signing Files
+        script: |
+          set -e
+          test -n "$CM_ANDROID_KEYSTORE_BASE64" || (echo "Missing CM_ANDROID_KEYSTORE_BASE64" && exit 1)
+          test -n "$CM_ANDROID_KEYSTORE_PASSWORD" || (echo "Missing CM_ANDROID_KEYSTORE_PASSWORD" && exit 1)
+          test -n "$CM_ANDROID_KEY_ALIAS" || (echo "Missing CM_ANDROID_KEY_ALIAS" && exit 1)
+          test -n "$CM_ANDROID_KEY_PASSWORD" || (echo "Missing CM_ANDROID_KEY_PASSWORD" && exit 1)
+
+          echo "$CM_ANDROID_KEYSTORE_BASE64" | base64 --decode > $CM_BUILD_DIR/android/keystore.jks
+          cat > $CM_BUILD_DIR/android/key.properties <<EOF
+          storePassword=$CM_ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$CM_ANDROID_KEY_PASSWORD
+          keyAlias=$CM_ANDROID_KEY_ALIAS
+          storeFile=../keystore.jks
+          EOF
+
+      - name: Build Signed APK (optimized)
+        script: |
+          set -e
+          flutter build apk \
+            --release \
+            --split-per-abi \
+            --tree-shake-icons \
+            --obfuscate \
+            --split-debug-info=build/symbols
+
+      - name: Build Signed App Bundle (AAB)
+        script: |
+          set -e
+          flutter build appbundle \
+            --release \
+            --tree-shake-icons \
+            --obfuscate \
+            --split-debug-info=build/symbols
+
+    artifacts:
+      - build/app/outputs/flutter-apk/*.apk
+      - build/app/outputs/bundle/release/*.aab
+      - build/symbols/**
+
+    publishing:
+      email:
+        recipients:
+          - build-notifications@orbit.local
+
+      # Future Google Play publishing (enable when credentials are ready):
+      # google_play:
+      #   credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+      #   track: internal
+      #   submit_as_draft: true
+      #   in_app_update_priority: 3

@@ -1,9 +1,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'auth_service.dart';
+import 'organization_service.dart';
+import 'remote_notification_service.dart';
+import 'resilient_stream_helper.dart';
+
 /// Servicio de chat real-time usando Firestore.
 /// Los mensajes se guardan en:
-///   /chatRooms/{roomId}/messages/{messageId}
+///   /chats/{roomId}/messages/{messageId}
 /// donde roomId es el ID de sala compartido entre los dos usuarios.
 class ChatApiService {
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -18,11 +23,14 @@ class ChatApiService {
   static Future<String> getOrCreateRoom(String otherUserId) async {
     final me = _auth.currentUser;
     if (me == null) throw StateError('No hay sesión activa');
+    if (me.uid == otherUserId)
+      throw ArgumentError('No puedes chatear contigo mismo');
+    await AuthService.ensureCommunicationAccess();
 
     final ids = [me.uid, otherUserId]..sort();
     final roomId = '${ids[0]}_${ids[1]}';
 
-    final ref = _db.collection('chatRooms').doc(roomId);
+    final ref = _db.collection('chats').doc(roomId);
     final snap = await ref.get();
 
     if (!snap.exists) {
@@ -43,13 +51,20 @@ class ChatApiService {
 
   /// Stream en tiempo real de mensajes de una sala, ordenados por timestamp.
   static Stream<QuerySnapshot<Map<String, dynamic>>> messagesStream(
-      String roomId) {
-    return _db
-        .collection('chatRooms')
-        .doc(roomId)
-        .collection('messages')
-        .orderBy('timestamp', descending: false)
-        .snapshots();
+    String roomId, {
+    void Function(ResilientStreamStatus status)? onStatus,
+  }) {
+    return ResilientStreamHelper.resilientStream(
+      streamFactory: () => _db
+          .collection('chats')
+          .doc(roomId)
+          .collection('messages')
+          .orderBy('createdAt', descending: false)
+          .snapshots(),
+      timeout: const Duration(seconds: 15),
+      onStatus: onStatus,
+      logTag: 'ChatApiMessagesStream:$roomId',
+    );
   }
 
   /// Envía un mensaje de texto a la sala [roomId].
@@ -60,25 +75,62 @@ class ChatApiService {
     final me = _auth.currentUser;
     if (me == null) throw StateError('No hay sesión activa');
     if (text.trim().isEmpty) return;
+    await AuthService.ensureCommunicationAccess();
 
     final batch = _db.batch();
 
     final msgRef =
-        _db.collection('chatRooms').doc(roomId).collection('messages').doc();
+        _db.collection('chats').doc(roomId).collection('messages').doc();
 
     batch.set(msgRef, {
-      'senderId': me.uid,
+      'userId': me.uid,
       'text': text.trim(),
-      'type': 'text',
-      'timestamp': FieldValue.serverTimestamp(),
+      'attachment': null,
+      'attachmentName': null,
+      'favorite': false,
+      'reaction': null,
+      'replyTo': null,
+      'replyToText': null,
+      'status': 'sent',
+      'createdAt': FieldValue.serverTimestamp(),
     });
 
     // Actualizar updatedAt de la sala
-    batch.update(_db.collection('chatRooms').doc(roomId), {
+    batch.update(_db.collection('chats').doc(roomId), {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
     await batch.commit();
+
+    final roomSnap = await _db.collection('chats').doc(roomId).get();
+    final participants =
+        (roomSnap.data()?['participants'] as List<dynamic>? ?? const [])
+            .map((e) => e.toString())
+            .toList();
+    final otherUserId = participants.firstWhere(
+      (uid) => uid != me.uid,
+      orElse: () => '',
+    );
+    if (otherUserId.isNotEmpty) {
+      final preview = text.trim().length > 80
+          ? '${text.trim().substring(0, 80)}...'
+          : text.trim();
+      await RemoteNotificationService.notifyUser(
+        targetUserId: otherUserId,
+        type: 'chat_message',
+        title: 'Nuevo mensaje',
+        body: preview,
+        data: {
+          'roomId': roomId,
+          'senderId': me.uid,
+        },
+      );
+    }
+
+    await OrganizationService.recordUsageForUser(
+      uid: me.uid,
+      messagesIncrement: 1,
+    );
   }
 
   /// Envía un mensaje con URL de archivo (imagen, audio, etc.) a la sala.
@@ -91,20 +143,61 @@ class ChatApiService {
   }) async {
     final me = _auth.currentUser;
     if (me == null) throw StateError('No hay sesión activa');
+    await AuthService.ensureCommunicationAccess();
 
-    await _db.collection('chatRooms').doc(roomId).collection('messages').add({
-      'senderId': me.uid,
+    await _db.collection('chats').doc(roomId).collection('messages').add({
+      'userId': me.uid,
+      'text': '',
+      'attachment': fileUrl,
+      'attachmentName': fileName,
+      'favorite': false,
+      'reaction': null,
+      'replyTo': null,
+      'replyToText': null,
+      'status': 'sent',
       'type': type,
-      'fileUrl': fileUrl,
       'metadata': {
-        'fileName': fileName,
         ...?metadata,
       },
-      'timestamp': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
     });
 
-    await _db.collection('chatRooms').doc(roomId).update({
+    await _db.collection('chats').doc(roomId).update({
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    final roomSnap = await _db.collection('chats').doc(roomId).get();
+    final participants =
+        (roomSnap.data()?['participants'] as List<dynamic>? ?? const [])
+            .map((e) => e.toString())
+            .toList();
+    final otherUserId = participants.firstWhere(
+      (uid) => uid != me.uid,
+      orElse: () => '',
+    );
+    if (otherUserId.isNotEmpty) {
+      final mediaLabel = switch (type) {
+        'image' => 'Te enviaron una imagen',
+        'video' => 'Te enviaron un video',
+        'audio' => 'Te enviaron una nota de voz',
+        _ => 'Te enviaron un archivo',
+      };
+      await RemoteNotificationService.notifyUser(
+        targetUserId: otherUserId,
+        type: 'chat_media',
+        title: 'Nuevo mensaje',
+        body: mediaLabel,
+        data: {
+          'roomId': roomId,
+          'senderId': me.uid,
+          'mediaType': type,
+        },
+      );
+    }
+
+    await OrganizationService.recordUsageForUser(
+      uid: me.uid,
+      messagesIncrement: 1,
+    );
   }
 }

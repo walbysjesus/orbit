@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/locale_service.dart';
 
 class FadeInWelcome extends StatefulWidget {
   final Widget child;
@@ -8,7 +9,8 @@ class FadeInWelcome extends StatefulWidget {
   State<FadeInWelcome> createState() => _FadeInWelcomeState();
 }
 
-class _FadeInWelcomeState extends State<FadeInWelcome> with SingleTickerProviderStateMixin {
+class _FadeInWelcomeState extends State<FadeInWelcome>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _fadeAnim;
 
@@ -46,54 +48,67 @@ class LanguageFab extends StatefulWidget {
 }
 
 class _LanguageFabState extends State<LanguageFab> {
-  String _selected = 'es';
-
   final Map<String, String> _langs = const {
-    'es': 'Español',
-    'en': 'English',
-    'fr': 'Français',
-    'de': 'Deutsch',
+    'es': '🇪🇸 Español',
+    'en': '🇺🇸 English',
+    'pt': '🇧🇷 Português',
+    'fr': '🇫🇷 Français',
+    'nl': '🇸🇷 Nederlands',
+    'de': '🇩🇪 Deutsch',
+    'it': '🇮🇹 Italiano',
   };
 
   @override
   Widget build(BuildContext context) {
-    return FloatingActionButton(
-      backgroundColor: const Color(0xFF3389FF),
-      tooltip: 'Seleccionar idioma',
-      child: const Icon(Icons.language, color: Colors.white),
-      onPressed: () async {
-        if (!mounted) return;
-        final bottomSheetContext = context;
-        final result = await showModalBottomSheet<String>(
-          context: bottomSheetContext,
-          builder: (sheetContext) {
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: _langs.entries.map((entry) {
-                return ListTile(
-                  leading: _selected == entry.key
-                      ? const Icon(Icons.check, color: Color(0xFF3389FF))
-                      : null,
-                  title: Text(entry.value),
-                  onTap: () => Navigator.pop(sheetContext, entry.key),
+    return ValueListenableBuilder<Locale>(
+      valueListenable: localeNotifier,
+      builder: (context, locale, _) {
+        final selected = locale.languageCode;
+        return FloatingActionButton(
+          backgroundColor: const Color(0xFF3389FF),
+          tooltip: 'Seleccionar idioma',
+          child: const Icon(Icons.language, color: Colors.white),
+          onPressed: () async {
+            if (!mounted) return;
+            final result = await showModalBottomSheet<String>(
+              context: context,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+              ),
+              builder: (sheetContext) {
+                return ListView(
+                  shrinkWrap: true,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                      child: Text(
+                        'Seleccionar idioma',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Color(0xFF0A4D8F),
+                        ),
+                      ),
+                    ),
+                    ..._langs.entries.map((entry) => ListTile(
+                          leading: selected == entry.key
+                              ? const Icon(Icons.check,
+                                  color: Color(0xFF3389FF))
+                              : const SizedBox(width: 24),
+                          title: Text(entry.value),
+                          onTap: () => Navigator.pop(sheetContext, entry.key),
+                        )),
+                    const SizedBox(height: 8),
+                  ],
                 );
-              }).toList(),
+              },
             );
+            if (!mounted) return;
+            if (result != null && result != selected) {
+              localeNotifier.value = Locale(result);
+            }
           },
         );
-        if (!mounted) return;
-        if (result != null && result != _selected) {
-          setState(() => _selected = result);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Idioma seleccionado: ${_langs[result]}',
-                ),
-              ),
-            );
-          }
-        }
       },
     );
   }

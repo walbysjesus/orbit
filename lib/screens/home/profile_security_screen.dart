@@ -42,11 +42,14 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
   }
 
   Future<void> _loadSecurityStatus() async {
+    if (!mounted) return; // lifecycle safety fix
     setState(() => _isLoading = true);
 
     try {
       final emailVerified = await SecurityService.isEmailVerified();
       final mfaEnabled = await MfaService.isMfaEnabled();
+
+      if (!mounted) return; // lifecycle safety fix
 
       setState(() {
         _emailVerified = emailVerified;
@@ -55,6 +58,7 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
     } catch (e) {
       _showError('Error cargando estado: $e');
     } finally {
+      if (!mounted) return; // lifecycle safety fix
       setState(() => _isLoading = false);
     }
   }
@@ -97,6 +101,8 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
         newPassword: _newPasswordController.text,
       );
 
+      if (!mounted) return; // lifecycle safety fix
+
       _showSuccess(
         '✓ Contraseña actualizada. Por favor, inicia sesión nuevamente.',
       );
@@ -107,10 +113,12 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
       _confirmPasswordController.clear();
 
       await Future.delayed(const Duration(seconds: 2));
-      if (mounted) Navigator.of(context).pop();
+      if (!context.mounted) return; // lifecycle safety fix
+      Navigator.of(context).pop();
     } catch (e) {
       _showError(e.toString().replaceAll('Exception: ', ''));
     } finally {
+      if (!mounted) return; // lifecycle safety fix
       setState(() => _isLoading = false);
     }
   }
@@ -120,12 +128,14 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
 
     try {
       await SecurityService.sendEmailVerification();
+      if (!mounted) return; // lifecycle safety fix
       _showSuccess(
         '✓ Email de verificación enviado. Revisa tu bandeja de entrada.',
       );
     } catch (e) {
       _showError(e.toString().replaceAll('Exception: ', ''));
     } finally {
+      if (!mounted) return; // lifecycle safety fix
       setState(() => _isLoading = false);
     }
   }
@@ -139,6 +149,7 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
   }
 
   void _showSuccess(String msg) {
+    if (!mounted) return; // lifecycle safety fix
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
@@ -149,6 +160,7 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
   }
 
   void _showError(String msg) {
+    if (!mounted) return; // lifecycle safety fix
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),

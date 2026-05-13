@@ -2,7 +2,10 @@
 // FIREBASE CONFIG
 // ===============================
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'package:orbit/firebase_options.dart';
+import 'package:orbit/services/turn_stun_config.dart';
 
 // ===============================
 // WEATHER API CONFIG
@@ -16,6 +19,21 @@ const String openWeatherMapApiKey =
 const String apiBaseUrl = String.fromEnvironment('API_BASE_URL',
     defaultValue: 'http://10.0.2.2:3000/api');
 
+const bool orbitIaRemoteEnabled = bool.fromEnvironment(
+  'ORBIT_IA_REMOTE_ENABLED',
+  defaultValue: false,
+);
+
+const String orbitIaRemoteEndpoint = String.fromEnvironment(
+  'ORBIT_IA_REMOTE_ENDPOINT',
+  defaultValue: '',
+);
+
+const bool enforceReleaseSecurityConfig = bool.fromEnvironment(
+  'ENFORCE_RELEASE_SECURITY_CONFIG',
+  defaultValue: true,
+);
+
 // ===============================
 // REAL-TIME COMMUNICATION CONFIG
 // ===============================
@@ -24,64 +42,121 @@ const String signalingWsUrl = String.fromEnvironment(
   defaultValue: 'ws://10.0.2.2:8080',
 );
 
-const String turnServerUrl =
-    String.fromEnvironment('TURN_URL', defaultValue: '');
-const String turnServerUsername =
-    String.fromEnvironment('TURN_USERNAME', defaultValue: '');
-const String turnServerCredential =
-    String.fromEnvironment('TURN_CREDENTIAL', defaultValue: '');
+String get orbitIaRemoteEndpointResolved {
+  final custom = orbitIaRemoteEndpoint.trim();
+  if (custom.isNotEmpty) {
+    return custom;
+  }
+
+  final ws = signalingWsUrl.trim();
+  if (ws.startsWith('wss://')) {
+    return '${ws.replaceFirst('wss://', 'https://')}/api/orbit-ia/chat';
+  }
+  if (ws.startsWith('ws://')) {
+    return '${ws.replaceFirst('ws://', 'http://')}/api/orbit-ia/chat';
+  }
+
+  return '$apiBaseUrl/orbit-ia/chat';
+}
+
+// ===============================
+// TURN/STUN CONFIG (MOVED TO turn_stun_config.dart)
+// See lib/services/turn_stun_config.dart for TURN/STUN management
+// ===============================
+// Use TurnStunConfig.buildIceServers() for WebRTC peer connection
+// Use TurnStunConfig.shouldBlockCallInRelease() to validate production readiness
 
 const String chatLocalEncryptionKey = String.fromEnvironment(
   'CHAT_LOCAL_AES_KEY',
   defaultValue: '',
 );
 
+const bool allowSecureStorageChatKeyInRelease = bool.fromEnvironment(
+  'ALLOW_SECURE_STORAGE_CHAT_KEY',
+  defaultValue: true,
+);
+
+const String e2eeRoomPayloadVersion = 'e2er2:v1';
+
 String get historyEndpoint => '$apiBaseUrl/history';
 
+bool _firebaseServicesConfigured = false;
+
 Future<void> initializeFirebase() async {
-  await Firebase.initializeApp();
+  if (Firebase.apps.isEmpty) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
+
+  await configureFirebaseServices();
 }
 
+Future<void> configureFirebaseServices() async {
+  if (_firebaseServicesConfigured) {
+    return;
+  }
+
+  // Offline-first: mantener cache persistente para zonas con conectividad intermitente.
+  FirebaseFirestore.instance.settings = const Settings(
+    persistenceEnabled: true,
+    cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+  );
+
+  _firebaseServicesConfigured = true;
+}
+
+/// Valida la configuración crítica de seguridad para producción.
+/// En release, cualquier error bloquea el inicio de la app.
 void validateProductionSecurityConfig() {
   final issues = getRealtimeConfigIssues(forRelease: kReleaseMode);
   if (issues.isEmpty) {
     return;
   }
-
-  // En desarrollo se informa, pero no se bloquea la app.
-  if (!kReleaseMode) {
+  // En desarrollo y en release no estricto se informa, pero no se bloquea la app.
+  if (!kReleaseMode || !enforceReleaseSecurityConfig) {
     debugPrint('Config warnings (debug): ${issues.join(' | ')}');
     return;
   }
-
+  // En release, cualquier advertencia es fatal.
   throw StateError(issues.join(' | '));
 }
 
 List<String> getRealtimeConfigIssues({required bool forRelease}) {
   final issues = <String>[];
 
-  if (forRelease && !signalingWsUrl.startsWith('wss://')) {
-    issues.add('En release, SIGNALING_WS_URL debe usar wss://');
+  final api = apiBaseUrl.trim().toLowerCase();
+  final ws = signalingWsUrl.trim().toLowerCase();
+
+  if (forRelease) {
+    if (!api.startsWith('https://')) {
+      issues.add('En release, API_BASE_URL debe usar https://');
+    }
+    if (api.contains('localhost') ||
+        api.contains('10.0.2.2') ||
+        api.contains('127.0.0.1')) {
+      issues.add(
+          'En release, API_BASE_URL no puede ser localhost/10.0.2.2/127.0.0.1');
+    }
+    if (!ws.startsWith('wss://')) {
+      issues.add('En release, SIGNALING_WS_URL debe usar wss://');
+    }
+    if (ws.contains('localhost') ||
+        ws.contains('10.0.2.2') ||
+        ws.contains('127.0.0.1')) {
+      issues.add(
+          'En release, SIGNALING_WS_URL no puede ser localhost/10.0.2.2/127.0.0.1');
+    }
+    if (!allowSecureStorageChatKeyInRelease &&
+        chatLocalEncryptionKey.trim().length < 32) {
+      issues.add(
+          'En release, CHAT_LOCAL_AES_KEY debe tener al menos 32 caracteres cuando ALLOW_SECURE_STORAGE_CHAT_KEY es false');
+    }
   }
 
-  final turnUrl = turnServerUrl.trim().toLowerCase();
-  final turnConfigured =
-      turnUrl.startsWith('turn:') || turnUrl.startsWith('turns:');
-  if (!turnConfigured) {
-    issues.add(
-        'Configura TURN_URL (turn: o turns:) para llamadas estables en NAT/red móvil');
-  }
-
-  if (turnConfigured &&
-      (turnServerUsername.trim().isEmpty ||
-          turnServerCredential.trim().isEmpty)) {
-    issues.add('TURN_URL requiere TURN_USERNAME y TURN_CREDENTIAL');
-  }
-
-  if (forRelease && chatLocalEncryptionKey.trim().length < 32) {
-    issues.add(
-        'En release, CHAT_LOCAL_AES_KEY debe tener al menos 32 caracteres');
-  }
+  // TURN/STUN validation delegated to TurnStunConfig
+  final turnIssues = TurnStunConfig.validateProduction();
+  issues.addAll(turnIssues);
 
   return issues;
 }

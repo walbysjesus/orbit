@@ -1,0 +1,146 @@
+name: Android Release Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-android-release:
+    name: Analyze, Test, Sign, Build APK/AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      FLUTTER_VERSION: stable
+      JAVA_VERSION: "17"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter Version
+        run: flutter --version
+
+      - name: Restore Pub Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Dependency Vulnerability Scan (OSV)
+        uses: google/osv-scanner-action@v1
+        with:
+          scan-args: |-
+            --lockfile=pubspec.lock
+            --recursive
+
+      - name: Static Analysis
+        run: flutter analyze
+
+      - name: Automated Tests
+        run: flutter test --reporter expanded
+
+      - name: Validate Signing Secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" || (echo "Missing ANDROID_KEYSTORE_BASE64" && exit 1)
+          test -n "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" || (echo "Missing ANDROID_KEYSTORE_PASSWORD" && exit 1)
+          test -n "${{ secrets.ANDROID_KEY_ALIAS }}" || (echo "Missing ANDROID_KEY_ALIAS" && exit 1)
+          test -n "${{ secrets.ANDROID_KEY_PASSWORD }}" || (echo "Missing ANDROID_KEY_PASSWORD" && exit 1)
+
+      - name: Prepare Keystore and key.properties
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/keystore.jks
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=../keystore.jks
+          EOF
+
+      - name: Build Signed Release APK (optimized)
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build apk \
+            --release \
+            --split-per-abi \
+            --tree-shake-icons \
+            --obfuscate \
+            --split-debug-info=build/symbols
+
+      - name: Build Signed Release App Bundle (AAB)
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build appbundle \
+            --release \
+            --tree-shake-icons \
+            --obfuscate \
+            --split-debug-info=build/symbols
+
+      - name: Upload APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbit-release-apk
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload AAB Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbit-release-aab
+          path: |
+            build/app/outputs/bundle/release/*.aab
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Obfuscation Symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbit-obfuscation-symbols
+          path: build/symbols/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Cleanup Signing Material
+        if: always()
+        shell: bash
+        run: |
+          rm -f android/key.properties android/keystore.jks

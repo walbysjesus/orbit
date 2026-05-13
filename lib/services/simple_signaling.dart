@@ -133,13 +133,36 @@ class SimpleSignaling {
   }
 
   Future<void> close() async {
+    // STABILIZATION: Comprehensive cleanup with error handling
     _isClosedByUser = true;
     _isConnected = false;
     onConnectionChanged?.call(false);
-    _reconnectTimer?.cancel();
-    await _subscription?.cancel();
-    await _channel?.sink.close();
-    _subscription = null;
-    _channel = null;
+
+    // Cancel reconnection timer
+    try {
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+    } catch (e) {
+      // Ignore timer cancellation errors
+    }
+
+    // Cancel subscription to prevent further messages
+    try {
+      await _subscription?.cancel();
+      _subscription = null;
+    } catch (e) {
+      // Ignore subscription cancellation errors
+    }
+
+    // Close WebSocket channel gracefully
+    try {
+      await _channel?.sink.close();
+      _channel = null;
+    } catch (e) {
+      // Ignore channel close errors (may already be closed)
+    }
+
+    // Reset state
+    _reconnectAttempt = 0;
   }
 }

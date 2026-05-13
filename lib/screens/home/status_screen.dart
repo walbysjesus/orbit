@@ -145,11 +145,12 @@ class _StatusScreenState extends State<StatusScreen> {
 
     await _persistStatuses();
 
+    if (!mounted) return; // lifecycle safety fix
+
     _textController.clear();
     _selectedMedia = null;
     _selectedMediaType = null;
 
-    if (!mounted) return;
     _showSnack('Estado publicado');
     setState(() => _submitting = false);
   }
@@ -295,6 +296,7 @@ class _StatusScreenState extends State<StatusScreen> {
                   onPressed: _submitting
                       ? null
                       : () async {
+                          if (!context.mounted) return; // lifecycle safety fix
                           Navigator.of(context).pop();
                           await _submitStatus();
                         },

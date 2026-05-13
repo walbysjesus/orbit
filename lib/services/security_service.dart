@@ -9,6 +9,13 @@ class SecurityService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static const _secureStorage = FlutterSecureStorage();
 
+  static String _attemptsKey(String email) =>
+      'login_attempts_${Uri.encodeComponent(email.trim().toLowerCase())}';
+  static String _lastFailedKey(String email) =>
+      'login_last_failed_${Uri.encodeComponent(email.trim().toLowerCase())}';
+  static String _lockedUntilKey(String email) =>
+      'login_locked_until_${Uri.encodeComponent(email.trim().toLowerCase())}';
+
   // ==================== CAMBIO DE CONTRASEÑA ====================
 
   /// Cambia la contraseña del usuario en Firebase Auth
@@ -152,20 +159,13 @@ class SecurityService {
   /// Verifica y registra intentos de login fallidos
   static Future<bool> canAttemptLogin(String email) async {
     try {
-      final userDoc = await _firestore.collection('users').doc(email).get();
-
-      if (!userDoc.exists) {
-        // Crear registro si no existe
-        await _firestore.collection('users').doc(email).set({
-          'loginAttempts': 0,
-          'lastFailedAttempt': null,
-        }, SetOptions(merge: true));
-        return true;
-      }
-
-      final data = userDoc.data();
-      final attempts = (data?['loginAttempts'] as int?) ?? 0;
-      final lockedUntil = (data?['lockedUntil'] as Timestamp?)?.toDate();
+      final attemptsStr = await _secureStorage.read(key: _attemptsKey(email));
+      final attempts = int.tryParse(attemptsStr ?? '') ?? 0;
+      final lockedUntilIso =
+          await _secureStorage.read(key: _lockedUntilKey(email));
+      final lockedUntil = lockedUntilIso == null
+          ? null
+          : DateTime.tryParse(lockedUntilIso)?.toLocal();
 
       // Si está bloqueado, verifica si ya pasó el tiempo
       if (lockedUntil != null && DateTime.now().isBefore(lockedUntil)) {
@@ -177,11 +177,13 @@ class SecurityService {
 
       // Máximo 5 intentos antes de bloquear por 15 minutos
       if (attempts >= 5) {
-        await _firestore.collection('users').doc(email).set({
-          'lockedUntil': Timestamp.fromDate(
-            DateTime.now().add(const Duration(minutes: 15)),
-          ),
-        }, SetOptions(merge: true));
+        await _secureStorage.write(
+          key: _lockedUntilKey(email),
+          value: DateTime.now()
+              .add(const Duration(minutes: 15))
+              .toUtc()
+              .toIso8601String(),
+        );
 
         throw Exception(
           'Demasiados intentos fallidos. Intenta de nuevo en 15 minutos.',
@@ -197,10 +199,16 @@ class SecurityService {
   /// Registra intento de login fallido
   static Future<void> recordFailedLoginAttempt(String email) async {
     try {
-      await _firestore.collection('users').doc(email).set({
-        'loginAttempts': FieldValue.increment(1),
-        'lastFailedAttempt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      final attemptsStr = await _secureStorage.read(key: _attemptsKey(email));
+      final attempts = int.tryParse(attemptsStr ?? '') ?? 0;
+      await _secureStorage.write(
+        key: _attemptsKey(email),
+        value: (attempts + 1).toString(),
+      );
+      await _secureStorage.write(
+        key: _lastFailedKey(email),
+        value: DateTime.now().toUtc().toIso8601String(),
+      );
 
       await _logSecurityEvent(
         userId: email,
@@ -216,11 +224,9 @@ class SecurityService {
   /// Limpia intentos de login al autenticar exitosamente
   static Future<void> clearFailedLoginAttempts(String email) async {
     try {
-      await _firestore.collection('users').doc(email).set({
-        'loginAttempts': 0,
-        'lastFailedAttempt': null,
-        'lockedUntil': null,
-      }, SetOptions(merge: true));
+      await _secureStorage.write(key: _attemptsKey(email), value: '0');
+      await _secureStorage.delete(key: _lastFailedKey(email));
+      await _secureStorage.delete(key: _lockedUntilKey(email));
     } catch (e) {
       print('Error limpiando intentos: $e');
     }
@@ -235,6 +241,11 @@ class SecurityService {
     required Map<String, dynamic> details,
   }) async {
     try {
+      final currentUid = _auth.currentUser?.uid;
+      if (currentUid == null || userId != currentUid) {
+        return;
+      }
+
       await _firestore.collection('securityLogs').add({
         'userId': userId,
         'eventType': eventType,

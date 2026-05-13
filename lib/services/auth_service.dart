@@ -3,12 +3,46 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:math';
 
+import 'organization_service.dart';
+import 'fcm_service.dart';
+
+enum AccountType {
+  general,
+  enterpriseAdmin,
+  enterpriseEmployee,
+}
+
+extension AccountTypeX on AccountType {
+  String get wireValue {
+    switch (this) {
+      case AccountType.general:
+        return 'general';
+      case AccountType.enterpriseAdmin:
+        return 'enterprise_admin';
+      case AccountType.enterpriseEmployee:
+        return 'enterprise_employee';
+    }
+  }
+}
+
 class AuthService {
-  static FirebaseAuth _auth = FirebaseAuth.instance;
   static final Random _random = Random.secure();
+  static final Map<String, _LoginAttemptWindow> _loginAttemptWindows =
+      <String, _LoginAttemptWindow>{};
+  static final Map<String, _RegistrationAttemptWindow>
+      _registrationAttemptWindows = <String, _RegistrationAttemptWindow>{};
+
+  static const int _maxFailedLoginAttempts = 5;
+  static const int _maxFailedRegistrationAttempts = 3;
+  static const Duration _loginAttemptWindowDuration = Duration(minutes: 15);
+  static const Duration _registrationAttemptWindowDuration = Duration(hours: 1);
+
+  static FirebaseAuth? _authOverride;
 
   @visibleForTesting
-  static set auth(FirebaseAuth auth) => _auth = auth;
+  static set auth(FirebaseAuth auth) => _authOverride = auth;
+
+  static FirebaseAuth get _auth => _authOverride ?? FirebaseAuth.instance;
 
   static User? _testCurrentUser;
 
@@ -22,6 +56,48 @@ class AuthService {
   @visibleForTesting
   static set testCurrentUser(User? user) => _testCurrentUser = user;
 
+  @visibleForTesting
+  static bool canAttemptLoginForTesting(
+    String email, {
+    DateTime? now,
+  }) {
+    return _canAttemptLogin(email, now: now);
+  }
+
+  @visibleForTesting
+  static void recordFailedLoginAttemptForTesting(
+    String email, {
+    DateTime? now,
+  }) {
+    _recordFailedLoginAttempt(email, now: now);
+  }
+
+  @visibleForTesting
+  static void resetLoginAttemptLimiterForTesting() {
+    _loginAttemptWindows.clear();
+  }
+
+  @visibleForTesting
+  static bool canAttemptRegistrationForTesting(
+    String email, {
+    DateTime? now,
+  }) {
+    return _canAttemptRegistration(email, now: now);
+  }
+
+  @visibleForTesting
+  static void recordFailedRegistrationAttemptForTesting(
+    String email, {
+    DateTime? now,
+  }) {
+    _recordFailedRegistrationAttempt(email, now: now);
+  }
+
+  @visibleForTesting
+  static void resetRegistrationAttemptLimiterForTesting() {
+    _registrationAttemptWindows.clear();
+  }
+
   // ================== REGISTER ==================
   static Future<void> register({
     required String email,
@@ -31,7 +107,18 @@ class AuthService {
     String? documentNumber,
     String? country,
     String? city,
+    AccountType accountType = AccountType.general,
+    String? organizationName,
+    String? organizationSector,
+    int? seatsRequested,
+    String? organizationId,
   }) async {
+    if (!_canAttemptRegistration(email)) {
+      throw Exception(
+        'Demasiados intentos de registro para este correo. Intenta de nuevo en 1 hora.',
+      );
+    }
+
     try {
       final cred = await _auth.createUserWithEmailAndPassword(
         email: email,
@@ -53,6 +140,7 @@ class AuthService {
         documentNumber: documentNumber,
         country: country,
         city: city,
+        accountType: accountType,
       );
 
       try {
@@ -65,9 +153,70 @@ class AuthService {
         debugPrint(
             'Registro completado con provisión parcial de OrbitNumber: $e\n$st');
       }
+
+      await _provisionOrganizationAccess(
+        uid: user.uid,
+        accountType: accountType,
+        organizationName: organizationName,
+        organizationSector: organizationSector,
+        seatsRequested: seatsRequested,
+        organizationId: organizationId,
+      );
+
+      // Save FCM token now that the Firestore profile document exists.
+      await FCMService.saveCurrentToken();
+      _clearFailedRegistrationAttempts(email);
     } on FirebaseAuthException catch (e) {
-      throw Exception(_firebaseError(e.code));
+      if (_shouldCountAsFailedRegistration(e.code)) {
+        _recordFailedRegistrationAttempt(email);
+      }
+      throw Exception(_firebaseError(e.code, isRegistration: true));
     }
+  }
+
+  static Future<void> _provisionOrganizationAccess({
+    required String uid,
+    required AccountType accountType,
+    String? organizationName,
+    String? organizationSector,
+    int? seatsRequested,
+    String? organizationId,
+  }) async {
+    final firestore = FirebaseFirestore.instance;
+    final userRef = firestore.collection('users').doc(uid);
+
+    if (accountType == AccountType.general) {
+      return;
+    }
+
+    if (accountType == AccountType.enterpriseAdmin) {
+      final seats = (seatsRequested ?? 1).clamp(1, 50000);
+      final orgId = await OrganizationService.createOrganizationForAdmin(
+        adminUid: uid,
+        organizationName: organizationName ?? '',
+        sector: organizationSector ?? 'empresa',
+        seatsPurchased: seats,
+      );
+
+      await userRef.set({
+        'organizationId': orgId,
+        'organizationRole': 'admin',
+        'organizationSector': (organizationSector ?? 'empresa').toLowerCase(),
+      }, SetOptions(merge: true));
+      return;
+    }
+
+    final orgId = (organizationId ?? '').trim();
+    if (orgId.isEmpty) {
+      throw Exception('Debes indicar el ID de organización para empleados');
+    }
+
+    await OrganizationService.joinOrganizationAsEmployee(
+        orgId: orgId, uid: uid);
+    await userRef.set({
+      'organizationId': orgId,
+      'organizationRole': 'employee',
+    }, SetOptions(merge: true));
   }
 
   static Future<void> _ensureOrbitNumberAssigned({
@@ -76,7 +225,8 @@ class AuthService {
   }) async {
     final userRef = firestore.collection('users').doc(uid);
 
-    for (var attempt = 0; attempt < 5; attempt++) {
+    // Aumentar reintentos a 10 con backoff exponencial
+    for (var attempt = 0; attempt < 10; attempt++) {
       await _getOrCreateOrbitNumber(firestore: firestore, uid: uid);
 
       final snap = await userRef.get();
@@ -85,11 +235,13 @@ class AuthService {
         return;
       }
 
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      // Backoff exponencial: 300ms, 600ms, 1.2s, 2.4s (máximo 5s)
+      final delayMs = (300 * (1 << (attempt ~/ 2))).clamp(0, 5000);
+      await Future<void>.delayed(Duration(milliseconds: delayMs));
     }
 
     throw Exception(
-      'No se pudo asignar el numero Orbit. Verifica reglas de Firestore y vuelve a intentar.',
+      'No se pudo asignar el numero Orbit. Verifica reglas de Firestore y conexión de red.',
     );
   }
 
@@ -101,6 +253,7 @@ class AuthService {
     String? documentNumber,
     String? country,
     String? city,
+    AccountType accountType = AccountType.general,
   }) async {
     final firestore = FirebaseFirestore.instance;
     final currentUser = _auth.currentUser;
@@ -129,6 +282,7 @@ class AuthService {
           'documentNumber': documentNumber,
           'country': country,
           'city': city,
+          'accountType': accountType.wireValue,
           'createdAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       } else {
@@ -138,6 +292,7 @@ class AuthService {
           'documentNumber': documentNumber,
           'country': country,
           'city': city,
+          'accountType': accountType.wireValue,
         }, SetOptions(merge: true));
       }
 
@@ -150,6 +305,15 @@ class AuthService {
         await userRef.set({
           'orbitNumber': orbitNumber,
         }, SetOptions(merge: true));
+
+        // Espejo público: solo campos no sensibles para búsqueda por Code Orbit.
+        await _writePublicProfile(
+          firestore: firestore,
+          uid: uid,
+          fullName: fullName,
+          orbitNumber: orbitNumber,
+          accountType: accountType,
+        );
       } catch (e, st) {
         // Se tolera para no romper registro; se reintentará en siguiente sesión.
         debugPrint('No se pudo asignar OrbitNumber durante registro: $e\n$st');
@@ -160,6 +324,25 @@ class AuthService {
             'Firestore denegó permisos al crear users/$uid. Verifica que las reglas desplegadas permitan write cuando request.auth.uid == userId.');
       }
       throw Exception('Error guardando perfil en Firestore: ${e.code}');
+    }
+  }
+
+  static Future<void> _writePublicProfile({
+    required FirebaseFirestore firestore,
+    required String uid,
+    String? fullName,
+    String? orbitNumber,
+    AccountType accountType = AccountType.general,
+  }) async {
+    try {
+      await firestore.collection('users_public').doc(uid).set({
+        'fullName': fullName,
+        'orbitNumber': orbitNumber,
+        'accountType': accountType.wireValue,
+      }, SetOptions(merge: true));
+    } catch (e) {
+      // No-critical: no bloquea el flujo de registro/login.
+      debugPrint('users_public write failed (non-critical): $e');
     }
   }
 
@@ -180,32 +363,47 @@ class AuthService {
       return existingNumber;
     }
 
-    for (var attempt = 0; attempt < 15; attempt++) {
-      final candidate = _generateOrbitNumber();
-      final claimed = await firestore.runTransaction<bool>((tx) async {
-        final numberRef = firestore.collection('orbitNumbers').doc(candidate);
-        final numberSnap = await tx.get(numberRef);
-        if (numberSnap.exists) {
-          return false;
-        }
+    // Aumentar reintentos a 25 y usar backoff exponencial para zonas remotas
+    for (var attempt = 0; attempt < 25; attempt++) {
+      try {
+        final candidate = _generateOrbitNumber();
+        final claimed = await firestore.runTransaction<bool>((tx) async {
+          final numberRef = firestore.collection('orbitNumbers').doc(candidate);
+          final numberSnap = await tx.get(numberRef);
+          if (numberSnap.exists) {
+            final existingUid = numberSnap.data()?['uid'] as String?;
+            if (existingUid == uid) {
+              // Ya nos pertenece, devolver true
+              return true;
+            }
+            return false;
+          }
 
-        tx.set(numberRef, {
-          'uid': uid,
-          'createdAt': FieldValue.serverTimestamp(),
+          tx.set(numberRef, {
+            'uid': uid,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+          tx.set(
+              userRef,
+              {
+                'orbitNumber': candidate,
+                'orbitNumberAssignedAt': FieldValue.serverTimestamp(),
+              },
+              SetOptions(merge: true));
+          return true;
         });
-        tx.set(
-            userRef,
-            {
-              'orbitNumber': candidate,
-              'orbitNumberAssignedAt': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true));
-        return true;
-      });
 
-      if (claimed) {
-        return candidate;
+        if (claimed) {
+          return candidate;
+        }
+      } catch (_) {
+        // Reintentar con otro candidato en la siguiente iteracion.
       }
+
+      // Backoff exponencial: 100ms, 200ms, 400ms, 800ms,etc. (maximo 5s)
+      // Para tolerar latencia alta en zonas remotas
+      final delayMs = (100 * (1 << (attempt ~/ 3))).clamp(0, 5000);
+      await Future<void>.delayed(Duration(milliseconds: delayMs));
     }
 
     throw Exception('No se pudo generar un numero Orbit unico');
@@ -273,6 +471,12 @@ class AuthService {
     required String email,
     required String password,
   }) async {
+    if (!_canAttemptLogin(email)) {
+      throw Exception(
+        'Demasiados intentos para este correo. Espera 15 minutos antes de reintentar.',
+      );
+    }
+
     try {
       final cred = await _auth.signInWithEmailAndPassword(
         email: email,
@@ -281,6 +485,12 @@ class AuthService {
       if (cred.user == null) {
         throw Exception('Login inválido');
       }
+
+      _clearFailedLoginAttempts(email);
+
+      // Si el perfil de Firestore no existe (ej: fue borrado manualmente),
+      // se recrea con los datos básicos del usuario de Auth.
+      await ensureCurrentUserProvisioned();
 
       final isSessionValid = await validateCurrentSession(
         requireUserProfile: true,
@@ -291,8 +501,152 @@ class AuthService {
           'Tu cuenta no está disponible. Inicia sesión nuevamente o regístrate.',
         );
       }
+
+      // Save FCM token after successful login.
+      await FCMService.saveCurrentToken();
     } on FirebaseAuthException catch (e) {
-      throw Exception(_firebaseError(e.code));
+      if (_shouldCountAsFailedLogin(e.code)) {
+        _recordFailedLoginAttempt(email);
+      }
+      throw Exception(_firebaseError(e.code, isRegistration: false));
+    }
+  }
+
+  static bool _canAttemptLogin(
+    String email, {
+    DateTime? now,
+  }) {
+    final normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail.isEmpty) {
+      return true;
+    }
+
+    final currentTime = now ?? DateTime.now();
+    final window = _loginAttemptWindows[normalizedEmail];
+    if (window == null) {
+      return true;
+    }
+
+    if (currentTime.difference(window.startedAt) >=
+        _loginAttemptWindowDuration) {
+      _loginAttemptWindows.remove(normalizedEmail);
+      return true;
+    }
+
+    return window.failedAttempts < _maxFailedLoginAttempts;
+  }
+
+  static void _recordFailedLoginAttempt(
+    String email, {
+    DateTime? now,
+  }) {
+    final normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail.isEmpty) {
+      return;
+    }
+
+    final currentTime = now ?? DateTime.now();
+    final existingWindow = _loginAttemptWindows[normalizedEmail];
+    if (existingWindow == null ||
+        currentTime.difference(existingWindow.startedAt) >=
+            _loginAttemptWindowDuration) {
+      _loginAttemptWindows[normalizedEmail] = _LoginAttemptWindow(
+        startedAt: currentTime,
+        failedAttempts: 1,
+      );
+      return;
+    }
+
+    _loginAttemptWindows[normalizedEmail] = existingWindow.copyWith(
+      failedAttempts: existingWindow.failedAttempts + 1,
+    );
+  }
+
+  static void _clearFailedLoginAttempts(String email) {
+    final normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail.isEmpty) {
+      return;
+    }
+    _loginAttemptWindows.remove(normalizedEmail);
+  }
+
+  static bool _shouldCountAsFailedLogin(String code) {
+    switch (code) {
+      case 'wrong-password':
+      case 'invalid-credential':
+      case 'user-not-found':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  static bool _canAttemptRegistration(
+    String email, {
+    DateTime? now,
+  }) {
+    final normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail.isEmpty) {
+      return true;
+    }
+
+    final currentTime = now ?? DateTime.now();
+    final window = _registrationAttemptWindows[normalizedEmail];
+    if (window == null) {
+      return true;
+    }
+
+    if (currentTime.difference(window.startedAt) >=
+        _registrationAttemptWindowDuration) {
+      _registrationAttemptWindows.remove(normalizedEmail);
+      return true;
+    }
+
+    return window.failedAttempts < _maxFailedRegistrationAttempts;
+  }
+
+  static void _recordFailedRegistrationAttempt(
+    String email, {
+    DateTime? now,
+  }) {
+    final normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail.isEmpty) {
+      return;
+    }
+
+    final currentTime = now ?? DateTime.now();
+    final existingWindow = _registrationAttemptWindows[normalizedEmail];
+    if (existingWindow == null ||
+        currentTime.difference(existingWindow.startedAt) >=
+            _registrationAttemptWindowDuration) {
+      _registrationAttemptWindows[normalizedEmail] = _RegistrationAttemptWindow(
+        startedAt: currentTime,
+        failedAttempts: 1,
+      );
+      return;
+    }
+
+    _registrationAttemptWindows[normalizedEmail] = existingWindow.copyWith(
+      failedAttempts: existingWindow.failedAttempts + 1,
+    );
+  }
+
+  static void _clearFailedRegistrationAttempts(String email) {
+    final normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail.isEmpty) {
+      return;
+    }
+    _registrationAttemptWindows.remove(normalizedEmail);
+  }
+
+  static bool _shouldCountAsFailedRegistration(String code) {
+    switch (code) {
+      case 'email-already-in-use':
+      case 'weak-password':
+      case 'invalid-email':
+        return true;
+      default:
+        return false;
     }
   }
 
@@ -374,6 +728,22 @@ class AuthService {
           }
           return false;
         }
+
+        final profileData = profile.data() ?? <String, dynamic>{};
+        final accountType = (profileData['accountType'] as String?)?.trim();
+        if (accountType == 'enterprise_admin' ||
+            accountType == 'enterprise_employee') {
+          final hasAccess = await _hasEnterpriseCommunicationAccess(
+            uid: user.uid,
+            profileData: profileData,
+          );
+          if (!hasAccess) {
+            if (signOutOnInvalid) {
+              await _safeLogout();
+            }
+            return false;
+          }
+        }
       }
 
       return true;
@@ -403,6 +773,68 @@ class AuthService {
     } catch (_) {}
   }
 
+  static Future<void> ensureCommunicationAccess() async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw Exception('No hay sesión activa');
+    }
+
+    final profileSnap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
+    if (!profileSnap.exists) {
+      throw Exception('Perfil no disponible');
+    }
+
+    final profileData = profileSnap.data() ?? <String, dynamic>{};
+    final accountType = (profileData['accountType'] as String?)?.trim();
+    if (accountType == 'enterprise_admin' ||
+        accountType == 'enterprise_employee') {
+      final allowed = await _hasEnterpriseCommunicationAccess(
+        uid: user.uid,
+        profileData: profileData,
+      );
+      if (!allowed) {
+        throw Exception(
+          'Tu organización no tiene acceso activo (plan/cupos/miembro).',
+        );
+      }
+    }
+  }
+
+  static Future<bool> _hasEnterpriseCommunicationAccess({
+    required String uid,
+    required Map<String, dynamic> profileData,
+  }) async {
+    final orgId = (profileData['organizationId'] as String?)?.trim();
+    if (orgId == null || orgId.isEmpty) return false;
+
+    final orgSnap = await FirebaseFirestore.instance
+        .collection('organizations')
+        .doc(orgId)
+        .get();
+    if (!orgSnap.exists) return false;
+
+    final orgData = orgSnap.data() ?? <String, dynamic>{};
+    final status = (orgData['status'] as String?)?.trim().toLowerCase();
+    final isActivePlan = status == 'active' || status == 'trial';
+    if (!isActivePlan) return false;
+
+    final seatsPurchased = (orgData['seatsPurchased'] as num?)?.toInt() ?? 0;
+    final seatsUsed = (orgData['seatsUsed'] as num?)?.toInt() ?? 0;
+    if (seatsPurchased <= 0 || seatsUsed > seatsPurchased) return false;
+
+    final memberSnap = await FirebaseFirestore.instance
+        .collection('organizationUsers')
+        .doc('${orgId}_$uid')
+        .get();
+    if (!memberSnap.exists) return false;
+
+    final active = memberSnap.data()?['active'] as bool? ?? false;
+    return active;
+  }
+
   static User? getCurrentUser() {
     if (_testCurrentUser != null) {
       return _testCurrentUser;
@@ -419,20 +851,20 @@ class AuthService {
   }
 
   // ================== UTIL ==================
-  static String _firebaseError(String code) {
+  static String _firebaseError(String code, {bool isRegistration = false}) {
     switch (code) {
       case 'email-already-in-use':
-        return 'Este correo ya está registrado';
+        return 'El correo o contraseña no son válidos';
       case 'invalid-email':
-        return 'Correo inválido';
+        return 'El correo o contraseña no son válidos';
       case 'weak-password':
-        return 'La contraseña es muy débil';
+        return 'El correo o contraseña no son válidos';
       case 'user-not-found':
-        return 'Usuario no existe';
+        return 'El correo o contraseña no son válidos';
       case 'wrong-password':
-        return 'Contraseña incorrecta';
+        return 'El correo o contraseña no son válidos';
       case 'invalid-credential':
-        return 'Correo o contraseña incorrectos';
+        return 'El correo o contraseña no son válidos';
       case 'too-many-requests':
         return 'Demasiados intentos. Intenta de nuevo más tarde';
       case 'network-request-failed':
@@ -440,5 +872,45 @@ class AuthService {
       default:
         return 'Error de autenticación';
     }
+  }
+}
+
+class _LoginAttemptWindow {
+  const _LoginAttemptWindow({
+    required this.startedAt,
+    required this.failedAttempts,
+  });
+
+  final DateTime startedAt;
+  final int failedAttempts;
+
+  _LoginAttemptWindow copyWith({
+    DateTime? startedAt,
+    int? failedAttempts,
+  }) {
+    return _LoginAttemptWindow(
+      startedAt: startedAt ?? this.startedAt,
+      failedAttempts: failedAttempts ?? this.failedAttempts,
+    );
+  }
+}
+
+class _RegistrationAttemptWindow {
+  const _RegistrationAttemptWindow({
+    required this.startedAt,
+    required this.failedAttempts,
+  });
+
+  final DateTime startedAt;
+  final int failedAttempts;
+
+  _RegistrationAttemptWindow copyWith({
+    DateTime? startedAt,
+    int? failedAttempts,
+  }) {
+    return _RegistrationAttemptWindow(
+      startedAt: startedAt ?? this.startedAt,
+      failedAttempts: failedAttempts ?? this.failedAttempts,
+    );
   }
 }
