@@ -106,11 +106,14 @@ jobs:
         run: flutter pub get
 
       - name: Dependency Vulnerability Scan (OSV)
-        uses: google/osv-scanner-action@v1
-        with:
-          scan-args: |-
-            --lockfile=pubspec.lock
-            --recursive
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 \
+            -o /usr/local/bin/osv-scanner
+          chmod +x /usr/local/bin/osv-scanner
+          osv-scanner --lockfile=pubspec.lock
 
       - name: Static Analysis
         run: flutter analyze
