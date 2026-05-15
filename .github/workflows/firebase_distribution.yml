@@ -14,8 +14,51 @@ permissions:
   contents: read
 
 jobs:
+  preflight-secrets:
+    name: Check Release Secrets
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+
+    steps:
+      - name: Check required secrets
+        id: check
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_APP_ID_ANDROID: ${{ secrets.FIREBASE_APP_ID_ANDROID }}
+        run: |
+          set -euo pipefail
+          missing=()
+
+          for secret_name in \
+            ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEYSTORE_PASSWORD \
+            ANDROID_KEY_ALIAS \
+            ANDROID_KEY_PASSWORD \
+            FIREBASE_TOKEN \
+            FIREBASE_APP_ID_ANDROID; do
+            if [ -z "${!secret_name:-}" ]; then
+              missing+=("$secret_name")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping Firebase distribution. Missing secrets: ${missing[*]}"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "All required Firebase distribution secrets are configured."
+          fi
+
   distribute-android:
     name: Build and Distribute Signed APK
+    needs: preflight-secrets
+    if: ${{ needs.preflight-secrets.outputs.ready == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -56,17 +99,6 @@ jobs:
 
       - name: Install Dependencies
         run: flutter pub get
-
-      - name: Validate Required Secrets
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" || (echo "Missing secret: ANDROID_KEYSTORE_BASE64" && exit 1)
-          test -n "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" || (echo "Missing secret: ANDROID_KEYSTORE_PASSWORD" && exit 1)
-          test -n "${{ secrets.ANDROID_KEY_ALIAS }}" || (echo "Missing secret: ANDROID_KEY_ALIAS" && exit 1)
-          test -n "${{ secrets.ANDROID_KEY_PASSWORD }}" || (echo "Missing secret: ANDROID_KEY_PASSWORD" && exit 1)
-          test -n "${{ secrets.FIREBASE_TOKEN }}" || (echo "Missing secret: FIREBASE_TOKEN" && exit 1)
-          test -n "${{ secrets.FIREBASE_APP_ID_ANDROID }}" || (echo "Missing secret: FIREBASE_APP_ID_ANDROID" && exit 1)
 
       - name: Prepare Android Signing Files
         shell: bash
@@ -144,3 +176,15 @@ jobs:
         shell: bash
         run: |
           rm -f android/key.properties android/keystore.jks
+
+  distribution-skipped:
+    name: Firebase Distribution Skipped
+    needs: preflight-secrets
+    if: ${{ needs.preflight-secrets.outputs.ready != 'true' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Explain skipped release
+        shell: bash
+        run: |
+          echo "Firebase distribution skipped because release secrets are not configured for this repository."

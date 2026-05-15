@@ -44,4 +44,38 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Local Gradle state (project-scoped cache to avoid global lock issues)
+/android/.gradle-user-home/
+/android/.gradle/
+/android/.kotlin/
+
+# Android signing secrets
+/android/key.properties
+/android/keystore/
+
 openJdk-25/
+
+# Local diagnostics and build logs (workspace-only artifacts)
+/aar_error.txt
+/analyze.txt
+/analyze.json
+/assemble_*.txt
+/build_*_log.txt
+/build_*_output.txt
+/build_debug_*.txt
+/build_log*.txt
+/build_release_now.txt
+/compile_kotlin_*.txt
+/flutter_run_verbose.txt
+/gradle_*_output.txt
+/gradle_*_stderr.txt
+/gradle_*_stdout.txt
+/gradle_help_after_fix.txt
+/release_build_latest.txt
+/terminal_write_test.txt
+/test_run_output.txt
+
+# Android transient local artifacts
+/android/.gradle-user-home-build/
+/android/build/
+/android/java_pid*.hprof
