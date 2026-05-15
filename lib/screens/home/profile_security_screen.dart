@@ -58,8 +58,7 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
     } catch (e) {
       _showError('Error cargando estado: $e');
     } finally {
-      if (!mounted) return; // lifecycle safety fix
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -93,6 +92,7 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
       return;
     }
 
+    final nav = Navigator.of(context);
     setState(() => _isLoading = true);
 
     try {
@@ -114,12 +114,11 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
 
       await Future.delayed(const Duration(seconds: 2));
       if (!context.mounted) return; // lifecycle safety fix
-      Navigator.of(context).pop();
+      nav.pop();
     } catch (e) {
       _showError(e.toString().replaceAll('Exception: ', ''));
     } finally {
-      if (!mounted) return; // lifecycle safety fix
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -135,8 +134,7 @@ class _ProfileSecurityScreenState extends State<ProfileSecurityScreen> {
     } catch (e) {
       _showError(e.toString().replaceAll('Exception: ', ''));
     } finally {
-      if (!mounted) return; // lifecycle safety fix
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 

@@ -63,7 +63,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
           .collection('users')
           .doc(fresh.uid)
           .get();
-        if (!mounted) return; // lifecycle safety fix
+      if (!mounted) return; // lifecycle safety fix
       final data = doc.data() ?? {};
 
       if (mounted) {
@@ -83,9 +83,10 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         });
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         _snack(
             'Error al cargar perfil: ${e.toString().replaceAll("Exception:", "").trim()}');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -109,7 +110,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
 
       // Actualizar display name en Firebase Auth
       await user.updateDisplayName(_nameCtrl.text.trim());
-        if (!mounted) return; // lifecycle safety fix
+      if (!mounted) return; // lifecycle safety fix
 
       // Actualizar datos en Firestore
       await FirebaseFirestore.instance
@@ -440,7 +441,8 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       child: Column(
         children: [
           DropdownButtonFormField<String>(
-            value: _docTypes.contains(_documentType) ? _documentType : null,
+            initialValue:
+                _docTypes.contains(_documentType) ? _documentType : null,
             decoration: InputDecoration(
               labelText: 'Tipo de documento',
               prefixIcon:

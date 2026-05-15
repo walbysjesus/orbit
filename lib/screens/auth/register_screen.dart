@@ -437,15 +437,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } catch (_) {
       // Fallback silencioso: se mantiene entrada manual de ciudad.
     } finally {
-      if (!mounted) return;
-      setState(() {
-        if (_availableCities.isEmpty &&
-            citiesByCountry.containsKey(selectedCountry)) {
-          _availableCities =
-              List<String>.from(citiesByCountry[selectedCountry]!);
-        }
-        _isLoadingCities = false;
-      });
+      if (mounted) {
+        setState(() {
+          if (_availableCities.isEmpty &&
+              citiesByCountry.containsKey(selectedCountry)) {
+            _availableCities =
+                List<String>.from(citiesByCountry[selectedCountry]!);
+          }
+          _isLoadingCities = false;
+        });
+      }
     }
   }
 

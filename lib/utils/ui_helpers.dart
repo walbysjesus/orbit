@@ -3,7 +3,7 @@ import '../services/locale_service.dart';
 
 class FadeInWelcome extends StatefulWidget {
   final Widget child;
-  const FadeInWelcome({required this.child, Key? key}) : super(key: key);
+  const FadeInWelcome({required this.child, super.key});
 
   @override
   State<FadeInWelcome> createState() => _FadeInWelcomeState();
@@ -41,7 +41,7 @@ class _FadeInWelcomeState extends State<FadeInWelcome>
 }
 
 class LanguageFab extends StatefulWidget {
-  const LanguageFab({Key? key}) : super(key: key);
+  const LanguageFab({super.key});
 
   @override
   State<LanguageFab> createState() => _LanguageFabState();

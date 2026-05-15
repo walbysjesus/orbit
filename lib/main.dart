@@ -118,8 +118,8 @@ Future<void> _initializeAppCheck() async {
   if (kDebugMode) {
     try {
       await FirebaseAppCheck.instance.activate(
-        androidProvider: AndroidProvider.debug,
-        appleProvider: AppleProvider.debug,
+        providerAndroid: AndroidProvider.debug,
+        providerApple: AppleProvider.debug,
       );
       debugPrint('App Check debug activado');
     } catch (e, st) {
@@ -130,8 +130,8 @@ Future<void> _initializeAppCheck() async {
 
   try {
     await FirebaseAppCheck.instance.activate(
-      androidProvider: AndroidProvider.playIntegrity,
-      appleProvider: AppleProvider.appAttest,
+      providerAndroid: AndroidProvider.playIntegrity,
+      providerApple: AppleProvider.appAttest,
     );
   } catch (e, st) {
     debugPrint('No se pudo inicializar App Check: $e\n$st');

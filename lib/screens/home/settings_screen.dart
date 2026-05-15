@@ -1026,11 +1026,12 @@ class _NotificationPermissionTileState
 
   Future<void> _checkPermission() async {
     final status = await Permission.notification.status;
-    if (mounted)
+    if (mounted) {
       setState(() {
         _status = status;
         _loading = false;
       });
+    }
   }
 
   Future<void> _handleTap() async {
@@ -1115,7 +1116,7 @@ class _NotificationPermissionTileState
               )
             : Switch(
                 value: granted,
-                activeColor: const Color(0xFF0A4D8F),
+                activeThumbColor: const Color(0xFF0A4D8F),
                 onChanged: (_) => _handleTap(),
               ),
         onTap: _handleTap,

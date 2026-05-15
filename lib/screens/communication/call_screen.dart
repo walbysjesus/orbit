@@ -127,6 +127,7 @@ class _CallScreenState extends State<CallScreen> {
       setState(() {
         _callHistory.insert(0, entry);
       });
+      final nav = Navigator.of(context);
       await prefs.setStringList(
         'callHistory',
         _callHistory
@@ -135,10 +136,10 @@ class _CallScreenState extends State<CallScreen> {
             .toList(),
       );
 
-        if (!context.mounted) return; // lifecycle safety fix
+      if (!context.mounted) return; // lifecycle safety fix
 
       // Abrir VideoCallScreen con el UID resuelto
-      await Navigator.of(context).push(
+      await nav.push(
         MaterialPageRoute(
           builder: (_) => VideoCallScreen(
             remoteUserId: targetUid,

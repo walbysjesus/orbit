@@ -117,12 +117,14 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       style: const TextStyle(color: Color(0xFF123A5B)),
                       validator: (value) {
-                        if (value == null || value.isEmpty)
+                        if (value == null || value.isEmpty) {
                           return 'Campo requerido';
+                        }
                         final emailRegex =
                             RegExp(r'^[\w-.]+@[\w-]+\.[a-zA-Z]{2,}$');
-                        if (!emailRegex.hasMatch(value))
+                        if (!emailRegex.hasMatch(value)) {
                           return 'Ingrese un correo válido';
+                        }
                         return null;
                       },
                     ),
@@ -165,8 +167,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       style: const TextStyle(color: Color(0xFF123A5B)),
                       validator: (value) {
-                        if (value == null || value.isEmpty)
+                        if (value == null || value.isEmpty) {
                           return 'Campo requerido';
+                        }
                         if (value.length < 8) return 'Mínimo 8 caracteres';
                         return null;
                       },

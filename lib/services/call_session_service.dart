@@ -15,8 +15,9 @@ class CallSessionService {
   }) async {
     final me = _auth.currentUser;
     if (me == null) throw StateError('No hay sesión activa');
-    if (calleeId == me.uid)
+    if (calleeId == me.uid) {
       throw ArgumentError('No puedes llamarte a ti mismo');
+    }
     await AuthService.ensureCommunicationAccess();
 
     final ref = _db.collection('callSessions').doc();
@@ -70,8 +71,9 @@ class CallSessionService {
       final now = Timestamp.now();
       final validDocs = snap.docs.where((doc) {
         final expires = doc.data()['ringingExpiresAt'] as Timestamp?;
-        if (expires == null)
+        if (expires == null) {
           return true; // sesión sin expiración: compatible hacia atrás
+        }
         return expires.compareTo(now) > 0;
       }).toList();
 

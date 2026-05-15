@@ -234,11 +234,12 @@ class ChatBubble extends StatelessWidget {
   }
 
   void _openAttachmentUrl(BuildContext context, String url) async {
+    final messenger = ScaffoldMessenger.of(context);
     final uri = Uri.parse(url);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('No se pudo abrir el archivo adjunto.')),
       );
     }

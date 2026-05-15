@@ -281,10 +281,12 @@ class _SecurityEditScreenState extends State<SecurityEditScreen> {
               onChanged: _evalStrength,
               validator: (v) {
                 if (v == null || v.length < 8) return 'Mínimo 8 caracteres';
-                if (!RegExp(r'[A-Z]').hasMatch(v))
+                if (!RegExp(r'[A-Z]').hasMatch(v)) {
                   return 'Incluye al menos una mayúscula';
-                if (!RegExp(r'[0-9]').hasMatch(v))
+                }
+                if (!RegExp(r'[0-9]').hasMatch(v)) {
                   return 'Incluye al menos un número';
+                }
                 return null;
               },
             ),
@@ -476,7 +478,7 @@ class _SecurityEditScreenState extends State<SecurityEditScreen> {
         final color = _logColor(type);
         return ListTile(
           leading: CircleAvatar(
-            backgroundColor: color.withOpacity(0.12),
+            backgroundColor: color.withValues(alpha: 0.12),
             child: Icon(icon, color: color, size: 18),
           ),
           title: Text(label,

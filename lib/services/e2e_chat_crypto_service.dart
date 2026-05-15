@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
@@ -22,8 +21,7 @@ class E2EChatCryptoService {
   static const int _gcmTagLength = 16;
 
   static const String _localKeyStorageKey = 'orbit_local_chat_key_v1';
-  static const String _roomMasterStorageKey =
-      'orbit_chat_room_master_key_v1';
+  static const String _roomMasterStorageKey = 'orbit_chat_room_master_key_v1';
 
   final FlutterSecureStorage _secureStorage;
   final Random _random;
@@ -44,8 +42,8 @@ class E2EChatCryptoService {
     // Resolve room master key from dart-define first and persist it for
     // continuity. In debug, allow secure local generation only if undefined.
     final configuredMaster = _normalizedMasterKey(chatLocalEncryptionKey);
-    final storedRoomMaster =
-        _normalizedMasterKey(await _secureStorage.read(key: _roomMasterStorageKey));
+    final storedRoomMaster = _normalizedMasterKey(
+        await _secureStorage.read(key: _roomMasterStorageKey));
 
     if (configuredMaster != null) {
       _roomMasterSecret = configuredMaster;
@@ -84,7 +82,8 @@ class E2EChatCryptoService {
     required String plainText,
   }) {
     final key = _deriveRoomKey(roomId);
-    return _encryptGcmWithKey(plainText: plainText, key: key, marker: _roomMarker);
+    return _encryptGcmWithKey(
+        plainText: plainText, key: key, marker: _roomMarker);
   }
 
   String decryptForRoom({
@@ -153,7 +152,8 @@ class E2EChatCryptoService {
 
   encrypt.Key? _tryDeriveRoomKey(String roomId) {
     final configuredMaster = _normalizedMasterKey(chatLocalEncryptionKey);
-    final activeMaster = configuredMaster ?? _normalizedMasterKey(_roomMasterSecret);
+    final activeMaster =
+        configuredMaster ?? _normalizedMasterKey(_roomMasterSecret);
     if (activeMaster == null) {
       return null;
     }
@@ -206,7 +206,8 @@ class E2EChatCryptoService {
 
     final cipherBytes =
         encryptedBytes.sublist(0, encryptedBytes.length - _gcmTagLength);
-    final tagBytes = encryptedBytes.sublist(encryptedBytes.length - _gcmTagLength);
+    final tagBytes =
+        encryptedBytes.sublist(encryptedBytes.length - _gcmTagLength);
     return [
       marker,
       _payloadVersion,
@@ -244,7 +245,8 @@ class E2EChatCryptoService {
 
       final combinedBytes = Uint8List(cipherBytes.length + tagBytes.length)
         ..setRange(0, cipherBytes.length, cipherBytes)
-        ..setRange(cipherBytes.length, cipherBytes.length + tagBytes.length, tagBytes);
+        ..setRange(
+            cipherBytes.length, cipherBytes.length + tagBytes.length, tagBytes);
 
       final iv = encrypt.IV(ivBytes);
       final encrypter = encrypt.Encrypter(

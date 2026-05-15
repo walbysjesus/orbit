@@ -9,8 +9,8 @@ class AudioRecordIndicator extends StatelessWidget {
     required this.isRecording,
     this.audioPath,
     this.elapsed = Duration.zero,
-    Key? key,
-  }) : super(key: key);
+    super.key,
+  });
 
   String _formatDuration(Duration duration) {
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
@@ -33,7 +33,7 @@ class AudioRecordIndicator extends StatelessWidget {
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.redAccent.withOpacity(0.5),
+                  color: Colors.redAccent.withValues(alpha: 0.5),
                   blurRadius: 12,
                   spreadRadius: 2,
                 ),

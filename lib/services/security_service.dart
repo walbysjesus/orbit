@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:async';
 
@@ -217,7 +218,7 @@ class SecurityService {
       );
     } catch (e) {
       // Log local si falla Firestore
-      print('Error registrando intento fallido: $e');
+      debugPrint('Error registrando intento fallido: $e');
     }
   }
 
@@ -228,7 +229,7 @@ class SecurityService {
       await _secureStorage.delete(key: _lastFailedKey(email));
       await _secureStorage.delete(key: _lockedUntilKey(email));
     } catch (e) {
-      print('Error limpiando intentos: $e');
+      debugPrint('Error limpiando intentos: $e');
     }
   }
 
@@ -255,7 +256,7 @@ class SecurityService {
         'userAgent': null,
       });
     } catch (e) {
-      print('Error registrando evento de seguridad: $e');
+      debugPrint('Error registrando evento de seguridad: $e');
     }
   }
 

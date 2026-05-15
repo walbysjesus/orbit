@@ -1240,11 +1240,11 @@ class IncomingCallBanner extends StatelessWidget {
   final VoidCallback onReject;
 
   const IncomingCallBanner({
-    Key? key,
+    super.key,
     required this.callerName,
     required this.onAccept,
     required this.onReject,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

@@ -23,8 +23,9 @@ class ChatApiService {
   static Future<String> getOrCreateRoom(String otherUserId) async {
     final me = _auth.currentUser;
     if (me == null) throw StateError('No hay sesión activa');
-    if (me.uid == otherUserId)
+    if (me.uid == otherUserId) {
       throw ArgumentError('No puedes chatear contigo mismo');
+    }
     await AuthService.ensureCommunicationAccess();
 
     final ids = [me.uid, otherUserId]..sort();

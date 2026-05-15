@@ -12,8 +12,7 @@ class CameraIconButton extends StatelessWidget {
       required this.onTap,
       this.iconColor,
       this.showFeedback = false,
-      Key? key})
-      : super(key: key);
+      super.key});
 
   @override
   Widget build(BuildContext context) {

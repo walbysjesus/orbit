@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 class NoveltyMenu extends StatelessWidget {
   final void Function(String) onSelected;
-  const NoveltyMenu({required this.onSelected, Key? key}) : super(key: key);
+  const NoveltyMenu({required this.onSelected, super.key});
 
   @override
   Widget build(BuildContext context) {

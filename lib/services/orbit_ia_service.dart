@@ -373,8 +373,7 @@ class OrbitIAService {
         text.contains('transportadora') ||
         text.contains('logistica') ||
         text.contains('flota')) {
-      final priorityHint =
-          priority == null ? 'costos, puntualidad o seguridad' : priority;
+      final priorityHint = priority ?? 'costos, puntualidad o seguridad';
       return 'Para una empresa transportadora, Orbit IA sirve para: '
           '1) priorizar el canal correcto segun señal (chat/voz/video), '
           '2) guiar protocolos ante incidentes en ruta, '
