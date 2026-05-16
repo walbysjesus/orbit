@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ready: ${{ steps.check.outputs.ready }}
+      missing: ${{ steps.check.outputs.missing }}
 
     steps:
       - name: Check required secrets
@@ -49,9 +50,11 @@ jobs:
 
           if [ ${#missing[@]} -gt 0 ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping Firebase distribution. Missing secrets: ${missing[*]}"
+            echo "missing=${missing[*]}" >> "$GITHUB_OUTPUT"
+            echo "::error::Missing required secrets for Firebase distribution: ${missing[*]}"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "missing=" >> "$GITHUB_OUTPUT"
             echo "All required Firebase distribution secrets are configured."
           fi
 
@@ -100,23 +103,41 @@ jobs:
       - name: Install Dependencies
         run: flutter pub get
 
+      - name: Environment Diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version
+          flutter --version
+          flutter --version --machine | head -c 400 || true
+
       - name: Prepare Android Signing Files
         shell: bash
         run: |
           set -euo pipefail
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/keystore.jks
+          test -s android/keystore.jks || (echo "::error::Generated android/keystore.jks is missing or empty" && exit 1)
           cat > android/key.properties <<EOF
           storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
           storeFile=../keystore.jks
           EOF
+          keytool -list -keystore android/keystore.jks \
+            -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            -alias "${{ secrets.ANDROID_KEY_ALIAS }}" >/dev/null
 
       - name: Static Analysis
-        run: flutter analyze
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter analyze 2>&1 | tee analyze.log
 
       - name: Automated Tests
-        run: flutter test --reporter expanded
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter test --reporter expanded 2>&1 | tee test.log
 
       - name: Build Signed Release APK (optimized)
         shell: bash
@@ -126,7 +147,8 @@ jobs:
             --release \
             --tree-shake-icons \
             --obfuscate \
-            --split-debug-info=build/symbols
+            --split-debug-info=build/symbols \
+            2>&1 | tee build_apk.log
 
       - name: Verify APK Exists
         shell: bash
@@ -136,7 +158,11 @@ jobs:
           ls -lh "${{ env.APK_PATH }}"
 
       - name: Setup Firebase CLI
-        run: npm install -g firebase-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g firebase-tools
+          firebase --version
 
       - name: Distribute to Firebase App Distribution
         shell: bash
@@ -148,18 +174,38 @@ jobs:
           set -euo pipefail
           RELEASE_NOTES="CI build ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}"
 
+          if [[ ! "$FIREBASE_APP_ID_ANDROID" =~ ^[0-9]+:[0-9]+:android:[a-f0-9]+$ ]]; then
+            echo "::error::FIREBASE_APP_ID_ANDROID has invalid format: $FIREBASE_APP_ID_ANDROID"
+            exit 1
+          fi
+
           if [ -n "${FIREBASE_TESTER_GROUPS:-}" ]; then
             firebase appdistribution:distribute "${{ env.APK_PATH }}" \
               --app "$FIREBASE_APP_ID_ANDROID" \
               --token "$FIREBASE_TOKEN" \
               --release-notes "$RELEASE_NOTES" \
-              --groups "$FIREBASE_TESTER_GROUPS"
+              --groups "$FIREBASE_TESTER_GROUPS" \
+              2>&1 | tee firebase_distribution.log
           else
             firebase appdistribution:distribute "${{ env.APK_PATH }}" \
               --app "$FIREBASE_APP_ID_ANDROID" \
               --token "$FIREBASE_TOKEN" \
-              --release-notes "$RELEASE_NOTES"
+              --release-notes "$RELEASE_NOTES" \
+              2>&1 | tee firebase_distribution.log
           fi
+
+      - name: Upload Diagnostic Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firebase-distribution-logs
+          path: |
+            analyze.log
+            test.log
+            build_apk.log
+            firebase_distribution.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -187,4 +233,8 @@ jobs:
       - name: Explain skipped release
         shell: bash
         run: |
-          echo "Firebase distribution skipped because release secrets are not configured for this repository."
+          echo "::error::Firebase distribution blocked. Missing secrets: ${{ needs.preflight-secrets.outputs.missing }}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            exit 1
+          fi
+          echo "Manual run detected; not failing hard."

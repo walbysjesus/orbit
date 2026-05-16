@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ready: ${{ steps.check.outputs.ready }}
+      missing: ${{ steps.check.outputs.missing }}
 
     steps:
       - name: Check required secrets
@@ -45,9 +46,11 @@ jobs:
 
           if [ ${#missing[@]} -gt 0 ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping Android release. Missing secrets: ${missing[*]}"
+            echo "missing=${missing[*]}" >> "$GITHUB_OUTPUT"
+            echo "::error::Missing required Android signing secrets: ${missing[*]}"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "missing=" >> "$GITHUB_OUTPUT"
             echo "All required Android signing secrets are configured."
           fi
 
@@ -105,6 +108,13 @@ jobs:
       - name: Install Dependencies
         run: flutter pub get
 
+      - name: Environment Diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version
+          flutter --version
+
       - name: Dependency Vulnerability Scan (OSV)
         shell: bash
         continue-on-error: true
@@ -116,22 +126,32 @@ jobs:
           osv-scanner --lockfile=pubspec.lock
 
       - name: Static Analysis
-        run: flutter analyze
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter analyze 2>&1 | tee analyze.log
 
       - name: Automated Tests
-        run: flutter test --reporter expanded
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter test --reporter expanded 2>&1 | tee test.log
 
       - name: Prepare Keystore and key.properties
         shell: bash
         run: |
           set -euo pipefail
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/keystore.jks
+          test -s android/keystore.jks || (echo "::error::Generated android/keystore.jks is missing or empty" && exit 1)
           cat > android/key.properties <<EOF
           storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
           storeFile=../keystore.jks
           EOF
+          keytool -list -keystore android/keystore.jks \
+            -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            -alias "${{ secrets.ANDROID_KEY_ALIAS }}" >/dev/null
 
       - name: Build Signed Release APK (optimized)
         shell: bash
@@ -144,7 +164,8 @@ jobs:
             --split-per-abi \
             --tree-shake-icons \
             --obfuscate \
-            --split-debug-info=build/symbols
+            --split-debug-info=build/symbols \
+            2>&1 | tee build_apk_release.log
 
       - name: Build Signed Release App Bundle (AAB)
         shell: bash
@@ -156,7 +177,21 @@ jobs:
             --build-name "$BUILD_NAME" \
             --tree-shake-icons \
             --obfuscate \
-            --split-debug-info=build/symbols
+            --split-debug-info=build/symbols \
+            2>&1 | tee build_aab_release.log
+
+      - name: Upload Diagnostic Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-logs
+          path: |
+            analyze.log
+            test.log
+            build_apk_release.log
+            build_aab_release.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
@@ -200,4 +235,8 @@ jobs:
       - name: Explain skipped release
         shell: bash
         run: |
-          echo "Android release skipped because signing secrets are not configured for this repository."
+          echo "::error::Android release blocked. Missing secrets: ${{ needs.preflight-secrets.outputs.missing }}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            exit 1
+          fi
+          echo "Manual run detected; not failing hard."
