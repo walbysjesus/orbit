@@ -21,7 +21,9 @@ Future<T> retry<T>(
         rethrow;
       }
       await Future.delayed(delay);
-      delay = Duration(milliseconds: (delay.inMilliseconds * 2).clamp(0, maxDelay?.inMilliseconds ?? 4000));
+      delay = Duration(
+          milliseconds: (delay.inMilliseconds * 2)
+              .clamp(0, maxDelay?.inMilliseconds ?? 4000));
     }
   }
 }

@@ -28,7 +28,8 @@ class RemoteConfigService {
     }
   }
 
-  bool get showPromotionBanner => _remoteConfig.getBool('show_promotion_banner');
+  bool get showPromotionBanner =>
+      _remoteConfig.getBool('show_promotion_banner');
   String get promotionMessage => _remoteConfig.getString('promotion_message');
   bool get enableGroupCalls => _remoteConfig.getBool('enable_group_calls');
 }

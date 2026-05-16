@@ -46,7 +46,8 @@ class InAppPurchaseService {
 
   Future<void> _buyProduct(String id) async {
     final products = await loadProducts();
-    final product = products.firstWhere((p) => p.id == id, orElse: () => throw Exception('Product not found'));
+    final product = products.firstWhere((p) => p.id == id,
+        orElse: () => throw Exception('Product not found'));
 
     final purchaseParam = PurchaseParam(productDetails: product);
     _iap.buyNonConsumable(purchaseParam: purchaseParam);
@@ -58,7 +59,8 @@ class InAppPurchaseService {
 
   void _onPurchaseUpdated(List<PurchaseDetails> purchases) {
     for (var purchase in purchases) {
-      if (purchase.status == PurchaseStatus.purchased || purchase.status == PurchaseStatus.restored) {
+      if (purchase.status == PurchaseStatus.purchased ||
+          purchase.status == PurchaseStatus.restored) {
         _verifyPurchase(purchase);
       }
       if (purchase.pendingCompletePurchase) {

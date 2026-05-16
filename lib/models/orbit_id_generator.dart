@@ -1,7 +1,5 @@
-
 import 'dart:math';
 import 'package:uuid/uuid.dart';
-
 
 /// Utilidad para generar y validar identificadores únicos en Orbit.
 class OrbitIdGenerator {
@@ -22,7 +20,8 @@ class OrbitIdGenerator {
   static String generateRandomId() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final rand = Random.secure();
-    String randomPart() => List.generate(8, (_) => chars[rand.nextInt(chars.length)]).join();
+    String randomPart() =>
+        List.generate(8, (_) => chars[rand.nextInt(chars.length)]).join();
     return 'ORB-${randomPart()}';
   }
 

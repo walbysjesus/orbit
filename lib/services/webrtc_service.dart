@@ -176,7 +176,8 @@ class WebRTCService {
         insertedBitrate = false;
       }
 
-      if (inVideoSection && (line.startsWith('b=AS:') || line.startsWith('b=TIAS:'))) {
+      if (inVideoSection &&
+          (line.startsWith('b=AS:') || line.startsWith('b=TIAS:'))) {
         if (!insertedBitrate) {
           output.add('b=AS:$safeBitrate');
           output.add('b=TIAS:${safeBitrate * 1000}');

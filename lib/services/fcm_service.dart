@@ -160,8 +160,8 @@ class FCMService {
         final payload = response.payload;
         if (payload == null || payload.isEmpty) return;
         try {
-          final data =
-              Map<String, dynamic>.from(jsonDecode(payload) as Map<String, dynamic>);
+          final data = Map<String, dynamic>.from(
+              jsonDecode(payload) as Map<String, dynamic>);
           _handleNotificationTapData(data);
         } catch (e) {
           debugPrint('[FCM] payload local invalido: $e');
@@ -186,8 +186,8 @@ class FCMService {
     final payload = response.payload;
     if (payload == null || payload.isEmpty) return;
     try {
-      final data =
-          Map<String, dynamic>.from(jsonDecode(payload) as Map<String, dynamic>);
+      final data = Map<String, dynamic>.from(
+          jsonDecode(payload) as Map<String, dynamic>);
       _handleNotificationTapData(data);
     } catch (_) {
       // Ignorar payload inválido para no romper la apertura.
@@ -235,9 +235,10 @@ class FCMService {
   ) async {
     if (!_localNotificationsReady) return;
 
-    final title = (message.notification?.title ?? message.data['senderName'] ?? 'Orbit')
-        .toString()
-        .trim();
+    final title =
+        (message.notification?.title ?? message.data['senderName'] ?? 'Orbit')
+            .toString()
+            .trim();
     final body = (message.notification?.body ??
             message.data['preview'] ??
             message.data['body'] ??
@@ -316,10 +317,7 @@ class FCMService {
       // Use update() so this never triggers a Firestore "create" operation.
       // During registration the doc may not exist yet; the token is saved
       // explicitly by AuthService after the profile document is created.
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .set({
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
         'fcmToken': token,
         'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));

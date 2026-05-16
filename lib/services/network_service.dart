@@ -204,10 +204,14 @@ class NetworkService {
   }) {
     final latency = latencyMs ?? 0;
     final stressScore = (isSatellite ? 2 : 0) +
-        (quality == NetworkQuality.low || quality == NetworkQuality.none ? 2 : 0) +
+        (quality == NetworkQuality.low || quality == NetworkQuality.none
+            ? 2
+            : 0) +
         (latency >= 700 ? 2 : (latency >= 450 ? 1 : 0)) +
         (reconnectAttempts >= 4 ? 2 : (reconnectAttempts >= 2 ? 1 : 0)) +
-        (unhealthyHeartbeatTicks >= 4 ? 2 : (unhealthyHeartbeatTicks >= 2 ? 1 : 0));
+        (unhealthyHeartbeatTicks >= 4
+            ? 2
+            : (unhealthyHeartbeatTicks >= 2 ? 1 : 0));
 
     if (stressScore >= 7) return ThermalLevel.critical;
     if (stressScore >= 5) return ThermalLevel.hot;
@@ -245,7 +249,8 @@ class NetworkService {
       unhealthyHeartbeatTicks: unhealthyHeartbeatTicks,
     );
 
-    final poorNetwork = quality == NetworkQuality.low || quality == NetworkQuality.none;
+    final poorNetwork =
+        quality == NetworkQuality.low || quality == NetworkQuality.none;
     final highLatency = (latencyMs ?? 0) >= 550;
     final batterySaver = batterySaverHint ||
         thermal == ThermalLevel.hot ||

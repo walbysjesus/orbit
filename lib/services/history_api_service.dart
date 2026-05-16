@@ -1,11 +1,9 @@
-
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../config/config.dart';
 import '../services/network_service.dart';
 import '../utils/retry_helper.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
 
 /// Servicio para obtener historial desde API REST.
 /// - Incluye reintentos automáticos y control de errores detallado.
@@ -31,7 +29,8 @@ class HistoryApiService {
   }
 
   /// Guarda historial en cache local.
-  static Future<void> _saveCachedHistory(List<Map<String, dynamic>> history) async {
+  static Future<void> _saveCachedHistory(
+      List<Map<String, dynamic>> history) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_cacheKey, jsonEncode(history));
@@ -41,10 +40,12 @@ class HistoryApiService {
       print('Warning: no se pudo guardar cache history: $e');
     }
   }
+
   /// Obtiene historial de mensajes/conversaciones desde el backend.
   /// Reintenta automáticamente hasta 3 veces en caso de error de red.
   /// Si no hay conexión, carga desde cache offline.
-  static Future<List<Map<String, dynamic>>> fetchHistory({http.Client? client, NetworkService? networkService}) async {
+  static Future<List<Map<String, dynamic>>> fetchHistory(
+      {http.Client? client, NetworkService? networkService}) async {
     final url = Uri.parse(historyEndpoint);
     final injectedClient = client ?? http.Client();
 
@@ -80,7 +81,8 @@ class HistoryApiService {
         await _saveCachedHistory(history);
         return history;
       } else {
-        throw Exception('Error HTTP ${response.statusCode}: ${response.reasonPhrase}');
+        throw Exception(
+            'Error HTTP ${response.statusCode}: ${response.reasonPhrase}');
       }
     } catch (e, st) {
       // Si falla la red, intentar cargar cache

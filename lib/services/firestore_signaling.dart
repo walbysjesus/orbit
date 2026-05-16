@@ -39,7 +39,8 @@ class FirestoreSignaling {
   final Set<String> _handledEventIds = <String>{};
   final Set<String> _handledCandidateIds = <String>{};
   final Set<String> _handledRestartRequestIds = <String>{};
-  final List<Map<String, dynamic>> _pendingLocalCandidates = <Map<String, dynamic>>[];
+  final List<Map<String, dynamic>> _pendingLocalCandidates =
+      <Map<String, dynamic>>[];
   Timer? _candidateFlushTimer;
   bool _cleanupDone = false;
 
@@ -252,7 +253,8 @@ class FirestoreSignaling {
               if (item is Map) {
                 onMessage?.call({
                   'type': 'candidate',
-                  'candidate': Map<String, dynamic>.from(item.cast<String, dynamic>()),
+                  'candidate':
+                      Map<String, dynamic>.from(item.cast<String, dynamic>()),
                 });
               }
             }

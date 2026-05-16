@@ -29,7 +29,8 @@ class OrbitContext {
         _weatherCondition = weatherCondition,
         _networkQuality = networkQuality;
   // Getters seguros para compatibilidad con lógica existente
-  WeatherCondition get weatherCondition => _weatherCondition ?? WeatherCondition.unknown;
+  WeatherCondition get weatherCondition =>
+      _weatherCondition ?? WeatherCondition.unknown;
   String get networkQuality => _networkQuality ?? 'unknown';
 
   void updateLastIntent(String intent) {

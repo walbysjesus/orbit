@@ -42,12 +42,10 @@ class DecisionEngine {
             '⛈️ Tormenta fuerte detectada. Se recomienda usar solo audio.';
         break;
       case WeatherCondition.rain:
-        weatherMessage =
-            '🌧️ Lluvia activa. Mantén atención en la vía.';
+        weatherMessage = '🌧️ Lluvia activa. Mantén atención en la vía.';
         break;
       case WeatherCondition.fog:
-        weatherMessage =
-            '🌫️ Niebla densa. Video deshabilitado por seguridad.';
+        weatherMessage = '🌫️ Niebla densa. Video deshabilitado por seguridad.';
         break;
       case WeatherCondition.extremeHeat:
         weatherMessage =

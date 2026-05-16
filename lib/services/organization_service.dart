@@ -229,11 +229,8 @@ class OrganizationService {
     final now = DateTime.now().toUtc();
     final dayKey =
         '${now.year.toString().padLeft(4, '0')}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
-    final bucket = sha256
-            .convert(utf8.encode('$orgId|$uid|$dayKey'))
-            .bytes
-            .first %
-        16;
+    final bucket =
+        sha256.convert(utf8.encode('$orgId|$uid|$dayKey')).bytes.first % 16;
     final shardId = '${dayKey}_b$bucket';
 
     final usageRef = _db
