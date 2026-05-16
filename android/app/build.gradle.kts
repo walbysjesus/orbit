@@ -37,10 +37,6 @@ android {
         // Keep packaged locales tight to reduce release size.
         resourceConfigurations.addAll(listOf("en", "es"))
 
-        ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
-        }
-
         manifestPlaceholders["cameraPermissionNode"] = "merge"
         manifestPlaceholders["microphonePermissionNode"] = "merge"
         manifestPlaceholders["audioSettingsPermissionNode"] = "merge"
