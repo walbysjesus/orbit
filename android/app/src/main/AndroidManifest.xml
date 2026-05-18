@@ -2,26 +2,13 @@
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission
-        android:name="android.permission.ACCESS_WIFI_STATE"
-        tools:node="remove" />
-    <uses-permission
-        android:name="android.permission.CAMERA"
-        tools:node="${cameraPermissionNode}" />
-    <uses-permission
-        android:name="android.permission.RECORD_AUDIO"
-        tools:node="${microphonePermissionNode}" />
-    <uses-permission
-        android:name="android.permission.MODIFY_AUDIO_SETTINGS"
-        tools:node="${audioSettingsPermissionNode}" />
-    <uses-permission
-        android:name="android.permission.POST_NOTIFICATIONS"
-        tools:node="${postNotificationsPermissionNode}" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE"
-        tools:node="${foregroundServicePermissionNode}" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />

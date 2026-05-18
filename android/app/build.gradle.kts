@@ -37,28 +37,12 @@ android {
         // Keep packaged locales tight to reduce release size.
         resourceConfigurations.addAll(listOf("en", "es"))
 
-        manifestPlaceholders["cameraPermissionNode"] = "merge"
-        manifestPlaceholders["microphonePermissionNode"] = "merge"
-        manifestPlaceholders["audioSettingsPermissionNode"] = "merge"
-        manifestPlaceholders["postNotificationsPermissionNode"] = "merge"
-        manifestPlaceholders["foregroundServicePermissionNode"] = "merge"
     }
 
     val keystorePropertiesFile = rootProject.file("key.properties")
     val keystoreProperties = Properties()
     val hasReleaseKeystore = keystorePropertiesFile.exists()
-    fun isPermissionEnabled(propertyName: String, defaultValue: Boolean): Boolean {
-        return providers.gradleProperty(propertyName)
-            .orNull
-            ?.toBooleanStrictOrNull()
-            ?: defaultValue
-    }
 
-    val enableCameraPermission = isPermissionEnabled("orbit.enableCameraPermission", true)
-    val enableMicrophonePermission = isPermissionEnabled("orbit.enableMicrophonePermission", true)
-    val enableAudioSettingsPermission = isPermissionEnabled("orbit.enableAudioSettingsPermission", true)
-    val enablePostNotificationsPermission = isPermissionEnabled("orbit.enablePostNotificationsPermission", true)
-    val enableForegroundServicePermission = isPermissionEnabled("orbit.enableForegroundServicePermission", true)
     val lowMemoryBuild = providers.gradleProperty("orbit.lowMemoryBuild").orNull == "true"
     val isReleaseTask = gradle.startParameter.taskNames.any {
         val normalized = it.lowercase()
@@ -90,11 +74,6 @@ android {
             isShrinkResources = false
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             manifestPlaceholders["networkSecurityConfig"] = "@xml/network_security_config_debug"
-            manifestPlaceholders["cameraPermissionNode"] = if (enableCameraPermission) "merge" else "remove"
-            manifestPlaceholders["microphonePermissionNode"] = if (enableMicrophonePermission) "merge" else "remove"
-            manifestPlaceholders["audioSettingsPermissionNode"] = if (enableAudioSettingsPermission) "merge" else "remove"
-            manifestPlaceholders["postNotificationsPermissionNode"] = if (enablePostNotificationsPermission) "merge" else "remove"
-            manifestPlaceholders["foregroundServicePermissionNode"] = if (enableForegroundServicePermission) "merge" else "remove"
         }
 
         release {
@@ -113,11 +92,6 @@ android {
             )
             manifestPlaceholders["usesCleartextTraffic"] = "false"
             manifestPlaceholders["networkSecurityConfig"] = "@xml/network_security_config"
-            manifestPlaceholders["cameraPermissionNode"] = if (enableCameraPermission) "merge" else "remove"
-            manifestPlaceholders["microphonePermissionNode"] = if (enableMicrophonePermission) "merge" else "remove"
-            manifestPlaceholders["audioSettingsPermissionNode"] = if (enableAudioSettingsPermission) "merge" else "remove"
-            manifestPlaceholders["postNotificationsPermissionNode"] = if (enablePostNotificationsPermission) "merge" else "remove"
-            manifestPlaceholders["foregroundServicePermissionNode"] = if (enableForegroundServicePermission) "merge" else "remove"
         }
     }
 
