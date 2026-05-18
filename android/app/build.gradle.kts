@@ -42,7 +42,6 @@ android {
         manifestPlaceholders["audioSettingsPermissionNode"] = "merge"
         manifestPlaceholders["postNotificationsPermissionNode"] = "merge"
         manifestPlaceholders["foregroundServicePermissionNode"] = "merge"
-        manifestPlaceholders["wifiStatePermissionNode"] = "remove"
     }
 
     val keystorePropertiesFile = rootProject.file("key.properties")
@@ -60,7 +59,6 @@ android {
     val enableAudioSettingsPermission = isPermissionEnabled("orbit.enableAudioSettingsPermission", true)
     val enablePostNotificationsPermission = isPermissionEnabled("orbit.enablePostNotificationsPermission", true)
     val enableForegroundServicePermission = isPermissionEnabled("orbit.enableForegroundServicePermission", true)
-    val enableWifiStatePermission = isPermissionEnabled("orbit.enableWifiStatePermission", false)
     val lowMemoryBuild = providers.gradleProperty("orbit.lowMemoryBuild").orNull == "true"
     val isReleaseTask = gradle.startParameter.taskNames.any {
         val normalized = it.lowercase()
@@ -97,7 +95,6 @@ android {
             manifestPlaceholders["audioSettingsPermissionNode"] = if (enableAudioSettingsPermission) "merge" else "remove"
             manifestPlaceholders["postNotificationsPermissionNode"] = if (enablePostNotificationsPermission) "merge" else "remove"
             manifestPlaceholders["foregroundServicePermissionNode"] = if (enableForegroundServicePermission) "merge" else "remove"
-            manifestPlaceholders["wifiStatePermissionNode"] = if (enableWifiStatePermission) "merge" else "remove"
         }
 
         release {
@@ -121,7 +118,6 @@ android {
             manifestPlaceholders["audioSettingsPermissionNode"] = if (enableAudioSettingsPermission) "merge" else "remove"
             manifestPlaceholders["postNotificationsPermissionNode"] = if (enablePostNotificationsPermission) "merge" else "remove"
             manifestPlaceholders["foregroundServicePermissionNode"] = if (enableForegroundServicePermission) "merge" else "remove"
-            manifestPlaceholders["wifiStatePermissionNode"] = if (enableWifiStatePermission) "merge" else "remove"
         }
     }
 
