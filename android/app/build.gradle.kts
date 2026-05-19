@@ -73,7 +73,6 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
             manifestPlaceholders["usesCleartextTraffic"] = "true"
-            manifestPlaceholders["networkSecurityConfig"] = "@xml/network_security_config_debug"
         }
 
         release {
@@ -91,7 +90,6 @@ android {
                 "proguard-rules.pro"
             )
             manifestPlaceholders["usesCleartextTraffic"] = "false"
-            manifestPlaceholders["networkSecurityConfig"] = "@xml/network_security_config"
         }
     }
 
