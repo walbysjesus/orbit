@@ -15,8 +15,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - run: dart format --output=none --set-exit-if-changed .
       - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
       - run: flutter test --coverage --reporter=expanded
       # - run: flutter build apk --release # Descomenta para builds automáticos
