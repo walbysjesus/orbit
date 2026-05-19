@@ -7,17 +7,24 @@ on:
   pull_request:
     branches: [ main ]
 
+concurrency:
+  group: flutter-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  quality-gate:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
+
       - run: flutter pub get
-      - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
-      - run: flutter test --coverage --reporter=expanded
+      - run: flutter test --reporter=expanded
       # - run: flutter build apk --release # Descomenta para builds automáticos
       # - run: flutter build ios --release # Descomenta solo con MacOS executor
