@@ -30,7 +30,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           FIREBASE_APP_ID_ANDROID: ${{ secrets.FIREBASE_APP_ID_ANDROID }}
         run: |
           set -euo pipefail
@@ -41,7 +41,7 @@ jobs:
             ANDROID_KEYSTORE_PASSWORD \
             ANDROID_KEY_ALIAS \
             ANDROID_KEY_PASSWORD \
-            FIREBASE_TOKEN \
+            FIREBASE_SERVICE_ACCOUNT_JSON \
             FIREBASE_APP_ID_ANDROID; do
             if [ -z "${!secret_name:-}" ]; then
               missing+=("$secret_name")
@@ -196,10 +196,89 @@ jobs:
           npm install -g firebase-tools
           firebase --version
 
+      - name: Prepare Firebase Credentials
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/firebase"
+          CREDENTIALS_PATH="$RUNNER_TEMP/firebase/service-account.json"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$CREDENTIALS_PATH"
+
+          if ! jq -e '.type == "service_account" and .client_email and .private_key and .project_id' "$CREDENTIALS_PATH" >/dev/null; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT_JSON is not a valid service account JSON"
+            exit 1
+          fi
+
+          SA_PROJECT_ID=$(jq -r '.project_id' "$CREDENTIALS_PATH")
+          if [ -z "$SA_PROJECT_ID" ] || [ "$SA_PROJECT_ID" = "null" ]; then
+            echo "::error::Unable to resolve project_id from FIREBASE_SERVICE_ACCOUNT_JSON"
+            exit 1
+          fi
+
+          echo "SA_PROJECT_ID=$SA_PROJECT_ID" >> "$GITHUB_ENV"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$CREDENTIALS_PATH" >> "$GITHUB_ENV"
+
+      - name: Validate Firebase App ID Mapping
+        shell: bash
+        env:
+          FIREBASE_APP_ID_ANDROID: ${{ secrets.FIREBASE_APP_ID_ANDROID }}
+        run: |
+          set -euo pipefail
+          EXPECTED_APP_ID=$(grep -m1 '"mobilesdk_app_id"' android/app/google-services.json | sed -E 's/.*: "([^"]+)".*/\1/')
+          EXPECTED_PACKAGE_NAME=$(grep -m1 '"package_name"' android/app/google-services.json | sed -E 's/.*: "([^"]+)".*/\1/')
+          GRADLE_APPLICATION_ID=$(grep -m1 'applicationId = ' android/app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
+
+          if [ -z "$EXPECTED_APP_ID" ] || [ -z "$EXPECTED_PACKAGE_NAME" ] || [ -z "$GRADLE_APPLICATION_ID" ]; then
+            echo "::error::Failed to resolve Firebase/Android identifiers from repository files"
+            exit 1
+          fi
+
+          if [ "$EXPECTED_PACKAGE_NAME" != "$GRADLE_APPLICATION_ID" ]; then
+            echo "::error::android/app/google-services.json package ($EXPECTED_PACKAGE_NAME) does not match Gradle applicationId ($GRADLE_APPLICATION_ID)"
+            exit 1
+          fi
+
+          if [ "$FIREBASE_APP_ID_ANDROID" != "$EXPECTED_APP_ID" ]; then
+            echo "::error::FIREBASE_APP_ID_ANDROID mismatch. Expected $EXPECTED_APP_ID (package $EXPECTED_PACKAGE_NAME), got $FIREBASE_APP_ID_ANDROID"
+            exit 1
+          fi
+
+      - name: Validate Firebase Project Access and App Existence
+        shell: bash
+        env:
+          FIREBASE_APP_ID_ANDROID: ${{ secrets.FIREBASE_APP_ID_ANDROID }}
+        run: |
+          set -euo pipefail
+          EXPECTED_PROJECT_ID=$(jq -r '.project_info.project_id // empty' android/app/google-services.json)
+
+          if [ -z "$EXPECTED_PROJECT_ID" ]; then
+            echo "::error::Unable to resolve project_info.project_id from android/app/google-services.json"
+            exit 1
+          fi
+
+          if [ "${SA_PROJECT_ID:-}" != "$EXPECTED_PROJECT_ID" ]; then
+            echo "::error::Service account project mismatch. google-services.json uses '$EXPECTED_PROJECT_ID' but FIREBASE_SERVICE_ACCOUNT_JSON uses '${SA_PROJECT_ID:-unset}'."
+            exit 1
+          fi
+
+          if ! firebase apps:list --project "$EXPECTED_PROJECT_ID" --json > firebase_apps.json 2>/tmp/firebase_apps_list.err; then
+            echo "::error::Unable to list Firebase apps for project '$EXPECTED_PROJECT_ID'. Ensure the service account has Firebase Admin/App Distribution permissions."
+            cat /tmp/firebase_apps_list.err || true
+            exit 1
+          fi
+
+          if ! jq -e --arg app_id "$FIREBASE_APP_ID_ANDROID" '.result[]? | select(.appId == $app_id)' firebase_apps.json >/dev/null; then
+            echo "::error::FIREBASE_APP_ID_ANDROID '$FIREBASE_APP_ID_ANDROID' does not exist in Firebase project '$EXPECTED_PROJECT_ID' (or App Distribution is not onboarded)."
+            echo "Available app IDs in this project:"
+            jq -r '.result[]?.appId' firebase_apps.json || true
+            exit 1
+          fi
+
       - name: Distribute to Firebase App Distribution
         shell: bash
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
           FIREBASE_APP_ID_ANDROID: ${{ secrets.FIREBASE_APP_ID_ANDROID }}
           FIREBASE_TESTER_GROUPS: ${{ secrets.FIREBASE_TESTER_GROUPS }}
         run: |
@@ -214,14 +293,12 @@ jobs:
           if [ -n "${FIREBASE_TESTER_GROUPS:-}" ]; then
             firebase appdistribution:distribute "${{ env.APK_PATH }}" \
               --app "$FIREBASE_APP_ID_ANDROID" \
-              --token "$FIREBASE_TOKEN" \
               --release-notes "$RELEASE_NOTES" \
               --groups "$FIREBASE_TESTER_GROUPS" \
               2>&1 | tee firebase_distribution.log
           else
             firebase appdistribution:distribute "${{ env.APK_PATH }}" \
               --app "$FIREBASE_APP_ID_ANDROID" \
-              --token "$FIREBASE_TOKEN" \
               --release-notes "$RELEASE_NOTES" \
               2>&1 | tee firebase_distribution.log
           fi
@@ -236,6 +313,7 @@ jobs:
             test.log
             build_apk.log
             firebase_distribution.log
+            firebase_apps.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -254,6 +332,9 @@ jobs:
         shell: bash
         run: |
           rm -f android/key.properties android/keystore.jks
+          if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+            rm -f "$GOOGLE_APPLICATION_CREDENTIALS"
+          fi
 
   distribution-skipped:
     name: Firebase Distribution Skipped
