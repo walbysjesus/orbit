@@ -141,10 +141,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Normalize potential whitespace/newlines in the secret before decoding.
+          # Normalize secrets to avoid hidden CR/LF or surrounding spaces in GitHub Secrets.
           CLEAN_KEYSTORE_BASE64="$(printf '%s' "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | tr -d '\r\n[:space:]')"
+          CLEAN_STORE_PASSWORD="$(printf '%s' "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          CLEAN_KEY_PASSWORD="$(printf '%s' "${{ secrets.ANDROID_KEY_PASSWORD }}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          CLEAN_KEY_ALIAS="$(printf '%s' "${{ secrets.ANDROID_KEY_ALIAS }}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           if [ -z "$CLEAN_KEYSTORE_BASE64" ]; then
             echo "::error::ANDROID_KEYSTORE_BASE64 is empty after normalization"
+            exit 1
+          fi
+          if [ -z "$CLEAN_STORE_PASSWORD" ] || [ -z "$CLEAN_KEY_PASSWORD" ] || [ -z "$CLEAN_KEY_ALIAS" ]; then
+            echo "::error::One or more signing secrets are empty after normalization"
             exit 1
           fi
 
@@ -156,22 +163,22 @@ jobs:
 
           test -s android/keystore.jks || (echo "::error::Generated android/keystore.jks is missing or empty" && exit 1)
           cat > android/key.properties <<EOF
-          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storePassword=$CLEAN_STORE_PASSWORD
+          keyPassword=$CLEAN_KEY_PASSWORD
+          keyAlias=$CLEAN_KEY_ALIAS
           storeFile=../keystore.jks
           EOF
 
           if ! keytool -list -keystore android/keystore.jks \
-            -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >/dev/null 2>/tmp/keystore_list.err; then
+            -storepass "$CLEAN_STORE_PASSWORD" >/dev/null 2>/tmp/keystore_list.err; then
             echo "::error::Keystore read failed. Check ANDROID_KEYSTORE_PASSWORD and keystore integrity."
             cat /tmp/keystore_list.err || true
             exit 1
           fi
 
           if ! keytool -list -keystore android/keystore.jks \
-            -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            -alias "${{ secrets.ANDROID_KEY_ALIAS }}" >/dev/null 2>/tmp/keystore_alias.err; then
+            -storepass "$CLEAN_STORE_PASSWORD" \
+            -alias "$CLEAN_KEY_ALIAS" >/dev/null 2>/tmp/keystore_alias.err; then
             echo "::error::Alias not found or inaccessible. Check ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD."
             cat /tmp/keystore_alias.err || true
             exit 1
