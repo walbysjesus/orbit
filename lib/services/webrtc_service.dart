@@ -7,18 +7,25 @@ import 'turn_stun_config.dart';
 /// Servicio WebRTC listo para producción con STUN/TURN públicos
 class WebRTCService {
   RTCPeerConnection? _peerConnection;
+  MediaStream? _localStream;
   bool _disposed = false;
   Timer? _heartbeatTimer;
   bool _lastHeartbeatHealthy = false;
   void Function(bool healthy)? onHeartbeatHealthChanged;
+
+  MediaStream? get localStream => _localStream;
 
   List<Map<String, dynamic>> _buildIceServers() {
     // ========== PHASE 2: Use centralized TurnStunConfig ==========
     return TurnStunConfig.buildIceServers();
   }
 
-  Future<void> initConnection({bool isCaller = true}) async {
-    if (_disposed) return; // lifecycle safety fix
+  Future<void> initConnection({
+    bool isCaller = true,
+    bool enableAudio = true,
+    bool enableVideo = false,
+  }) async {
+    if (_disposed) return;
     final config = {
       'iceServers': _buildIceServers(),
       'sdpSemantics': 'unified-plan',
@@ -30,12 +37,37 @@ class WebRTCService {
     };
     _peerConnection = await createPeerConnection(config);
     if (_disposed) {
-      // lifecycle safety fix
       await _peerConnection?.close();
       _peerConnection = null;
       return;
     }
-    // Puedes agregar listeners para onIceCandidate, onTrack, etc.
+
+    // Capturar media stream (audio/video)
+    try {
+      final constraints = <String, dynamic>{
+        'audio': enableAudio,
+        'video': enableVideo
+            ? {
+                'mandatory': {
+                  'minWidth': 640,
+                  'minHeight': 480,
+                  'minFrameRate': 30,
+                },
+                'facingMode': 'user',
+                'optional': [],
+              }
+            : false,
+      };
+
+      _localStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      // Agregar tracks al peer connection
+      for (final track in _localStream!.getTracks()) {
+        await _peerConnection!.addTrack(track, _localStream!);
+      }
+    } catch (e) {
+      throw Exception('Error capturing media: $e');
+    }
   }
 
   Future<RTCSessionDescription> createOffer({bool iceRestart = false}) async {
@@ -100,9 +132,24 @@ class WebRTCService {
   }
 
   void dispose() {
-    _disposed = true; // lifecycle safety fix
+    _disposed = true;
     stopConnectionHeartbeat();
-    _peerConnection?.close();
+    closeConnection();
+  }
+
+  Future<void> closeConnection() async {
+    _disposed = true;
+    stopConnectionHeartbeat();
+    
+    if (_localStream != null) {
+      for (final track in _localStream!.getTracks()) {
+        await track.stop();
+      }
+      await _localStream!.dispose();
+      _localStream = null;
+    }
+
+    await _peerConnection?.close();
     _peerConnection = null;
   }
 

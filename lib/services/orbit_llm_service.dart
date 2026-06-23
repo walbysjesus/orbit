@@ -1,7 +1,8 @@
 import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:http/http.dart' as http;
+import 'package:dio/dio.dart';
+import 'package:orbit/services/api_client.dart';
 
 import '../config/config.dart';
 import '../ia_core/orbit_context.dart';
@@ -90,23 +91,20 @@ class OrbitLlmService {
   }) async {
     try {
       final stopwatch = Stopwatch()..start();
-      final response = await http
-          .post(
-            uri,
-            headers: headers,
-            body: jsonEncode(payload),
-          )
+      final dio = ApiClient.createAuthenticatedClient();
+      final response = await dio
+          .post(uri.toString(), data: payload, options: Options(headers: headers))
           .timeout(timeout);
       stopwatch.stop();
 
-      if (response.statusCode < 200 || response.statusCode >= 300) {
+      final status = response.statusCode ?? 0;
+      if (status < 200 || status >= 300) {
         return null;
       }
-      if (response.body.trim().isEmpty) {
-        return null;
-      }
+      final body = response.data;
+      if (body == null) return null;
 
-      final decoded = jsonDecode(response.body);
+      final decoded = body is String ? jsonDecode(body) : body;
       if (decoded is! Map<String, dynamic>) {
         return null;
       }

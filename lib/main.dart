@@ -17,12 +17,17 @@ import 'screens/auth/welcome_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/communication/chat_screen.dart';
+import 'screens/communication/call_initiate_screen.dart';
+import 'screens/communication/call_receiver_screen.dart';
+import 'screens/communication/video_call_screen_production.dart';
+import 'screens/communication/call_history_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/home/settings_screen.dart';
 
 import 'services/auth_service.dart';
 import 'services/fcm_service.dart';
 import 'services/remote_config_service.dart';
+import 'services/crashlytics_service.dart';
 
 /// Punto de entrada principal de la app Orbit.
 /// Inicializa Firebase y FCM (notificaciones push) con control de errores automático.
@@ -60,6 +65,7 @@ void main() async {
       }
       await configureFirebaseServices();
       await _initializeAppCheck();
+      await CrashlyticsService.initialize();
       loggedIn = await AuthService.isLoggedIn();
     } else {
       debugPrint(
@@ -285,6 +291,28 @@ class _MyAppState extends State<MyApp> {
         '/register': (_) => const RegisterScreen(),
         '/home': (_) => const HomeScreen(),
         '/settings': (_) => const SettingsScreen(),
+        '/call-initiate': (_) => const CallInitiateScreen(),
+        '/call-receiver': (context) {
+          final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+          return CallReceiverScreen(
+            callId: args?['callId'] ?? '',
+            callerId: args?['callerId'] ?? '',
+            callerName: args?['callerName'] ?? 'Usuario',
+            callerPhoto: args?['callerPhoto'],
+            isVideo: args?['isVideo'] ?? false,
+          );
+        },
+        '/video-call': (context) {
+          final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+          return VideoCallScreenProduction(
+            roomId: args?['roomId'] ?? '',
+            remoteUserId: args?['remoteUserId'] ?? '',
+            remoteDisplayName: args?['remoteDisplayName'] ?? 'Usuario',
+            isVideo: args?['isVideo'] ?? false,
+            isCaller: args?['isCaller'] ?? true,
+          );
+        },
+        '/call-history': (_) => const CallHistoryScreen(),
       },
       onGenerateRoute: (settings) {
         if (settings.name != '/chat') return null;

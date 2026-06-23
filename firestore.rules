@@ -370,6 +370,81 @@ service cloud.firestore {
       }
     }
 
+    // ─── Validaciones de seguridad ────────────────────────────
+    function validCallData(data) {
+      return data.keys().hasOnly([
+        'callId',
+        'roomId',
+        'callerId',
+        'callerName',
+        'callerPhoto',
+        'receiverId',
+        'isVideo',
+        'status',
+        'createdAt',
+        'acceptedAt',
+        'endedAt',
+        'duration',
+        'fcmSent',
+        'fcmSentAt'
+      ])
+      && data.callId is string
+      && data.callId.size() > 0
+      && data.callerId is string
+      && data.callerId.size() > 0
+      && data.receiverId is string
+      && data.receiverId.size() > 0
+      && data.isVideo is bool
+      && data.status is string
+      && data.status in ['pending', 'ringing', 'active', 'ended', 'rejected', 'missed']
+      && data.duration is int
+      && data.duration >= 0;
+    }
+
+    function validCallUpdate(oldData, newData) {
+      // Campos que no pueden cambiar
+      return newData.callerId == oldData.callerId
+        && newData.receiverId == oldData.receiverId
+        && newData.callId == oldData.callId
+        && newData.roomId == oldData.roomId;
+    }
+
+    // ─── Llamadas Firebase P2P (Nueva colección) ────────────────────────────
+    match /calls/{callId} {
+      allow create: if isSignedIn()
+        && request.resource.data.callerId == request.auth.uid
+        && validCallData(request.resource.data)
+        && request.resource.data.status == 'pending';
+
+      allow read: if isSignedIn()
+        && (
+          request.auth.uid == resource.data.callerId
+          || request.auth.uid == resource.data.receiverId
+        );
+
+      allow update: if isSignedIn()
+        && (
+          request.auth.uid == resource.data.callerId
+          || request.auth.uid == resource.data.receiverId
+        )
+        && validCallUpdate(resource.data, request.resource.data)
+        && (
+          // Permitir cambios de estado válidos
+          (resource.data.status == 'pending' && request.resource.data.status in ['ringing', 'rejected', 'missed'])
+          || (resource.data.status == 'ringing' && request.resource.data.status in ['active', 'rejected', 'missed'])
+          || (resource.data.status == 'active' && request.resource.data.status == 'ended')
+          || (resource.data.status in ['pending', 'ringing'] && request.resource.data.status == 'missed')
+        );
+
+      allow delete: if isSignedIn()
+        && (
+          request.auth.uid == resource.data.callerId
+          || request.auth.uid == resource.data.receiverId
+        )
+        && resource.data.status in ['ended', 'rejected', 'missed']
+        && resource.data.createdAt.toMillis() + (86400 * 1000) < now.toMillis();
+    }
+
     match /organizations/{orgId} {
       allow create: if isSignedIn()
         && request.resource.data.keys().hasOnly([

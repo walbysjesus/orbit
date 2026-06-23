@@ -915,7 +915,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         });
 
         await _runWithFirestoreRetry(() => batch.commit()).timeout(
-          const Duration(seconds: 12),
+          const Duration(seconds: 30),
         );
 
         if (!mounted) return; // lifecycle safety fix
@@ -1930,7 +1930,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               absorbing: _uploading,
               child: Column(
                 children: [
-                  if (_connectionStateLabel.isNotEmpty)
+                  if (_connectionStateLabel.isNotEmpty && _connectionState != RealtimeUxState.online)
                     ErrorPresenter.buildStatusStrip(
                       state: _connectionState,
                       message: _connectionStateLabel,

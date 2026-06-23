@@ -35,9 +35,10 @@ class DefaultFirebaseOptions {
     }
   }
 
+  // NOTA: Mantener en sync con android/app/google-services.json (mobilesdk_app_id)
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyAOE_bha-j2rBB7Ofc4HsvOlmwkhAGFIGE',
-    appId: '1:1040464298596:android:4d3058bb74cf81ae049571',
+    appId: '1:1040464298596:android:aef46fabb7c4cbd1049571',
     messagingSenderId: '1040464298596',
     projectId: 'orbit-app-1',
     storageBucket: 'orbit-app-1.firebasestorage.app',

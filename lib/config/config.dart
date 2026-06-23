@@ -29,9 +29,16 @@ const String orbitIaRemoteEndpoint = String.fromEnvironment(
   defaultValue: '',
 );
 
+/// Si es `true`, en `--release` se bloquea el arranque cuando faltan
+/// configuraciones críticas (URLs seguras, etc.).
+///
+/// IMPORTANTE: se deja `false` por defecto para que los APK release locales/QA
+/// no queden inutilizables por falta de `--dart-define`. En CI/Producción se
+/// recomienda compilar con:
+///   --dart-define=ENFORCE_RELEASE_SECURITY_CONFIG=true
 const bool enforceReleaseSecurityConfig = bool.fromEnvironment(
   'ENFORCE_RELEASE_SECURITY_CONFIG',
-  defaultValue: true,
+  defaultValue: false,
 );
 
 // ===============================
@@ -107,19 +114,37 @@ Future<void> configureFirebaseServices() async {
 }
 
 /// Valida la configuración crítica de seguridad para producción.
-/// En release, cualquier error bloquea el inicio de la app.
+///
+/// - En `--release` + `ENFORCE_RELEASE_SECURITY_CONFIG=true` bloquea el arranque
+///   si faltan URLs seguras y otros parámetros críticos.
+/// - La validación de TURN no bloquea el arranque: se valida al iniciar llamadas
+///   usando `TurnStunConfig.shouldBlockCallInRelease()`.
 void validateProductionSecurityConfig() {
   final issues = getRealtimeConfigIssues(forRelease: kReleaseMode);
-  if (issues.isEmpty) {
+
+  // TURN se reporta como warning pero no bloquea el arranque.
+  final turnIssues =
+      kReleaseMode ? TurnStunConfig.validateProduction() : const <String>[];
+
+  if (issues.isEmpty && turnIssues.isEmpty) {
     return;
   }
+
   // En desarrollo y en release no estricto se informa, pero no se bloquea la app.
   if (!kReleaseMode || !enforceReleaseSecurityConfig) {
-    debugPrint('Config warnings (debug): ${issues.join(' | ')}');
+    if (issues.isNotEmpty) {
+      debugPrint('Config warnings: ${issues.join(' | ')}');
+    }
+    if (turnIssues.isNotEmpty) {
+      debugPrint('TURN warnings: ${turnIssues.join(' | ')}');
+    }
     return;
   }
-  // En release, cualquier advertencia es fatal.
-  throw StateError(issues.join(' | '));
+
+  // En release estricto, solo las issues "core" son fatales.
+  if (issues.isNotEmpty) {
+    throw StateError(issues.join(' | '));
+  }
 }
 
 List<String> getRealtimeConfigIssues({required bool forRelease}) {
@@ -154,9 +179,8 @@ List<String> getRealtimeConfigIssues({required bool forRelease}) {
     }
   }
 
-  // TURN/STUN validation delegated to TurnStunConfig
-  final turnIssues = TurnStunConfig.validateProduction();
-  issues.addAll(turnIssues);
+  // Nota: TURN/STUN no se valida aquí para no bloquear el arranque.
+  // Se valida en el flujo de llamadas con TurnStunConfig.shouldBlockCallInRelease().
 
   return issues;
 }

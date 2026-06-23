@@ -1,8 +1,8 @@
-import 'dart:convert';
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:dio/dio.dart';
+
+import 'package:orbit/services/api_client.dart';
 
 import '../config/config.dart';
 
@@ -34,20 +34,19 @@ class RemoteNotificationService {
     };
 
     try {
-      final resp = await http
-          .post(
-            uri,
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-            body: jsonEncode(payload),
-          )
-          .timeout(const Duration(seconds: 6));
+      final dio = ApiClient.createAuthenticatedClient();
+      final resp = await dio.post(
+        uri.toString(),
+        data: payload,
+        options: Options(headers: {
+          'Content-Type': 'application/json',
+          if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+        }),
+      ).timeout(const Duration(seconds: 6));
 
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        debugPrint(
-            'Notify API fallo (${resp.statusCode}): ${resp.body.isEmpty ? 'sin cuerpo' : resp.body}');
+      final status = resp.statusCode ?? 0;
+      if (status < 200 || status >= 300) {
+        debugPrint('Notify API fallo ($status): ${resp.data ?? 'sin cuerpo'}');
       }
     } catch (e) {
       debugPrint('Notify API no disponible: $e');

@@ -284,27 +284,45 @@ class FCMService {
   }
 
   static void _handleNotificationTapData(Map<String, dynamic> data) {
-    final type = (data['type'] ?? '').toString();
-    final roomId = (data['roomId'] ?? '').toString();
-    final senderId = (data['senderId'] ?? '').toString();
-    final senderName = (data['senderName'] ?? '').toString();
-
-    final targetPeerId = senderId.trim();
-    if (targetPeerId.isEmpty) {
-      debugPrint('[FCM] tap sin senderId. type=$type roomId=$roomId');
-      return;
-    }
+    final type = (data['type'] ?? '').toString().trim();
+    final roomId = (data['roomId'] ?? '').toString().trim();
+    final senderId = (data['senderId'] ?? '').toString().trim();
+    final senderName = (data['senderName'] ?? '').toString().trim();
+    final callId = (data['callId'] ?? '').toString().trim();
+    final isVideo = (data['isVideo'] ?? 'false').toString().toLowerCase() == 'true';
 
     final nav = navigatorKey.currentState;
     if (nav == null) {
-      debugPrint('[FCM] navigator no disponible para abrir chat');
+      debugPrint('[FCM] navigator no disponible. type=$type');
+      return;
+    }
+
+    // Manejar llamadas entrantes
+    if (type == 'incoming_call' && callId.isNotEmpty && senderId.isNotEmpty) {
+      debugPrint('[FCM] Navegando a incoming call: callId=$callId, caller=$senderName');
+      nav.pushNamed(
+        '/call-receiver',
+        arguments: {
+          'callId': callId,
+          'callerId': senderId,
+          'callerName': senderName.isEmpty ? 'Usuario' : senderName,
+          'callerPhoto': data['callerPhoto'],
+          'isVideo': isVideo,
+        },
+      );
+      return;
+    }
+
+    // Manejar mensajes de chat
+    if (senderId.isEmpty) {
+      debugPrint('[FCM] tap sin senderId. type=$type roomId=$roomId');
       return;
     }
 
     nav.pushNamed(
       _chatRoute,
       arguments: {
-        'remoteUserId': targetPeerId,
+        'remoteUserId': senderId,
         'initialContactName': senderName,
       },
     );

@@ -75,7 +75,7 @@ android {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
         }
 
-        release {
+                release {
             if (!hasReleaseKeystore && isReleaseTask) {
                 throw GradleException(
                     "Release keystore missing. Create android/key.properties from android/key.properties.example before building release."
@@ -83,14 +83,20 @@ android {
             }
 
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = true
-            isShrinkResources = true
+
+            // En equipos con poca RAM, R8 (minify/shrink) suele disparar el consumo de memoria/tiempo.
+            // Si orbit.lowMemoryBuild=true, desactivamos R8 para asegurar que el APK salga.
+            val enableR8 = !lowMemoryBuild
+            isMinifyEnabled = enableR8
+            isShrinkResources = enableR8
+
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
             manifestPlaceholders["usesCleartextTraffic"] = "false"
         }
+
     }
 
     lint {

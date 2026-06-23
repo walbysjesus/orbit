@@ -1,4 +1,5 @@
-import 'package:http/http.dart' as http;
+import 'package:dio/dio.dart';
+import 'package:orbit/services/api_client.dart';
 import 'dart:convert';
 import '../config/config.dart';
 import '../services/network_service.dart';
@@ -45,9 +46,9 @@ class HistoryApiService {
   /// Reintenta automáticamente hasta 3 veces en caso de error de red.
   /// Si no hay conexión, carga desde cache offline.
   static Future<List<Map<String, dynamic>>> fetchHistory(
-      {http.Client? client, NetworkService? networkService}) async {
-    final url = Uri.parse(historyEndpoint);
-    final injectedClient = client ?? http.Client();
+      {Dio? client, NetworkService? networkService}) async {
+    final url = historyEndpoint; // use string URL for Dio
+    final injectedClient = client ?? ApiClient.createAuthenticatedClient();
 
     bool isConnected = false;
     if (networkService != null) {
@@ -74,15 +75,16 @@ class HistoryApiService {
         maxAttempts: 3,
         retryIf: (e) => e is Exception,
       );
-      if (response.statusCode == 200) {
-        final List<dynamic> data = jsonDecode(response.body);
-        final history = data.cast<Map<String, dynamic>>();
+      final status = response.statusCode ?? 0;
+      if (status >= 200 && status < 300) {
+        final data = response.data;
+        final List<dynamic> listData = data is String ? jsonDecode(data) : data;
+        final history = List<Map<String, dynamic>>.from(listData.cast<Map<String, dynamic>>());
         // Guardar en cache
         await _saveCachedHistory(history);
         return history;
       } else {
-        throw Exception(
-            'Error HTTP ${response.statusCode}: ${response.reasonPhrase}');
+        throw Exception('Error HTTP ${response.statusCode}: ${response.statusMessage}');
       }
     } catch (e, st) {
       // Si falla la red, intentar cargar cache
@@ -90,9 +92,8 @@ class HistoryApiService {
       print('Error en fetchHistory, cargando cache: $e\n$st');
       return await _loadCachedHistory();
     } finally {
-      if (client == null) {
-        injectedClient.close();
-      }
+      // Dio no requiere cierre explícito. If an external http.Client was
+      // provided previously we removed that API; nothing to close here.
     }
   }
 }

@@ -68,7 +68,7 @@ jobs:
 
     env:
       APK_ARTIFACT_NAME: orbit-release-apk
-      APK_PATH: downloaded-apk/app-release.apk
+      APK_DIR: downloaded-apk
 
     steps:
       - name: Checkout
@@ -95,14 +95,24 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ env.RELEASE_RUN_ID }}
           name: ${{ env.APK_ARTIFACT_NAME }}
-          path: downloaded-apk
+          path: ${{ env.APK_DIR }}
 
-      - name: Verify APK Exists
+      - name: Resolve APK Path
         shell: bash
         run: |
           set -euo pipefail
-          test -f "${{ env.APK_PATH }}" || (echo "APK not found at ${{ env.APK_PATH }}" && exit 1)
-          ls -lh "${{ env.APK_PATH }}"
+          # Prefer arm64 if multiple APKs exist (split-per-abi)
+          APK_PATH=$(ls -1 "${{ env.APK_DIR }}"/*arm64*.apk 2>/dev/null | head -n 1 || true)
+          if [ -z "${APK_PATH}" ]; then
+            APK_PATH=$(ls -1 "${{ env.APK_DIR }}"/*.apk 2>/dev/null | head -n 1 || true)
+          fi
+          if [ -z "${APK_PATH}" ]; then
+            echo "::error::No APK found in '${{ env.APK_DIR }}'."
+            ls -la "${{ env.APK_DIR }}" || true
+            exit 1
+          fi
+          echo "APK_PATH=${APK_PATH}" >> "$GITHUB_ENV"
+          ls -lh "${APK_PATH}"
 
       - name: Setup Firebase CLI
         shell: bash
@@ -252,3 +262,4 @@ jobs:
             exit 1
           fi
           echo "Manual run detected; not failing hard."
+

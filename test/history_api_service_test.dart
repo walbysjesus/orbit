@@ -1,9 +1,6 @@
-import 'dart:convert';
-
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 import 'package:orbit/services/history_api_service.dart';
 import 'package:orbit/services/network_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -27,8 +24,12 @@ void main() {
     test('fetchHistory usa cache si no hay conexión de red', () async {
       final networkService =
           NetworkService(FakeConnectivityProvider(ConnectivityResult.none));
+      final mockDio = SimpleMockDio(
+        responseData: [],
+        statusCode: 200,
+      );
       final result = await HistoryApiService.fetchHistory(
-        client: MockClient((_) async => http.Response('[]', 200)),
+        client: mockDio,
         networkService: networkService,
       );
 
@@ -36,8 +37,12 @@ void main() {
     });
 
     test('fetchHistory usa cache si el backend no responde', () async {
+      final mockDio = SimpleMockDio(
+        responseData: 'error',
+        statusCode: 500,
+      );
       final result = await HistoryApiService.fetchHistory(
-        client: MockClient((_) async => http.Response('error', 500)),
+        client: mockDio,
       );
 
       expect(result, isEmpty);
@@ -49,14 +54,39 @@ void main() {
         {'id': 1, 'message': 'Hola'},
       ];
 
-      final client = MockClient((request) async {
-        expect(request.url.path, endsWith('/history'));
-        return http.Response(jsonEncode(sampleData), 200);
-      });
+      final mockDio = SimpleMockDio(
+        responseData: sampleData,
+        statusCode: 200,
+      );
 
-      final result = await HistoryApiService.fetchHistory(client: client);
+      final result = await HistoryApiService.fetchHistory(client: mockDio);
       expect(result, isA<List<Map<String, dynamic>>>());
       expect(result.first['message'], 'Hola');
     });
   });
+}
+
+/// Simple mock implementation of Dio for testing
+class SimpleMockDio implements Dio {
+  final dynamic responseData;
+  final int statusCode;
+
+  SimpleMockDio({required this.responseData, required this.statusCode});
+
+  @override
+  Future<Response<T>> get<T>(String path,
+      {Map<String, dynamic>? queryParameters,
+      Options? options,
+      CancelToken? cancelToken,
+      ProgressCallback? onReceiveProgress,
+      Object? data}) async {
+    return Response<T>(
+      requestOptions: RequestOptions(path: path),
+      data: responseData as T,
+      statusCode: statusCode,
+    );
+  }
+
+  @override
+  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

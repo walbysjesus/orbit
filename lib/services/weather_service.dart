@@ -1,6 +1,6 @@
 import 'package:weather/weather.dart';
-import '../config/config.dart';
 import '../ia_core/decision_engine.dart';
+import 'config_service.dart';
 
 class WeatherService {
   static Future<WeatherCondition> getCurrentWeather({
@@ -8,8 +8,12 @@ class WeatherService {
     required double lon,
   }) async {
     try {
+      final apiKey = ConfigService.getOpenWeatherApiKey();
+      if (apiKey.isEmpty) {
+        return WeatherCondition.unknown;
+      }
       final weatherFactory =
-          WeatherFactory(openWeatherMapApiKey, language: Language.SPANISH);
+          WeatherFactory(apiKey, language: Language.SPANISH);
       final Weather weather =
           await weatherFactory.currentWeatherByLocation(lat, lon);
       final description = (weather.weatherDescription ?? '').toLowerCase();

@@ -777,6 +777,7 @@ class _HomeScreenState extends State<HomeScreen> {
         drawer: _buildHomeDrawer(uid, _displayName),
         body: Column(
           children: [
+          if (_homeRealtimeState != RealtimeUxState.online)
             ErrorPresenter.buildStatusStrip(
               state: _homeRealtimeState,
               message: _homeRealtimeMessage,
