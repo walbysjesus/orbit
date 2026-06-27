@@ -65,6 +65,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
   final E2EChatCryptoService _crypto = E2EChatCryptoService();
+  Future<void>? _cryptoInitFuture;
 
   bool _showEmojiPicker = false;
   bool _uploading = false;
@@ -142,7 +143,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (initialName.isNotEmpty) {
       _contactName = initialName;
     }
-    unawaited(_crypto.initialize());
+    _cryptoInitFuture = _crypto.initialize();
     unawaited(_initRecorder());
     unawaited(_loadContactName());
     _bootstrapRoom();
@@ -223,6 +224,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (currentUid.isEmpty || _remoteUserId.isEmpty) {
         if (!mounted) return;
         setState(() => _initializing = false);
+        if (currentUid.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Debes iniciar sesión para usar el chat'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
         return;
       }
 
@@ -835,6 +844,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
+    try {
+      await _ensureCryptoReady();
+    } catch (e) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        ErrorPresenter.humanize(
+          e,
+          fallback: 'No se pudo inicializar el cifrado del chat.',
+        ),
+        state: RealtimeUxState.error,
+      );
+      return;
+    }
+
     final replySnapshot = _replyTo;
     final pendingId = 'pending_${DateTime.now().microsecondsSinceEpoch}';
 
@@ -991,6 +1015,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _pickAttachment() async {
     final roomId = _roomId;
     if (roomId == null || _currentUserId.isEmpty || _remoteUserId.isEmpty) {
+      return;
+    }
+
+    try {
+      await _ensureCryptoReady();
+    } catch (e) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        ErrorPresenter.humanize(
+          e,
+          fallback: 'No se pudo inicializar el cifrado del chat.',
+        ),
+        state: RealtimeUxState.error,
+      );
       return;
     }
 
@@ -1206,6 +1245,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       {required int durationMs}) async {
     final roomId = _roomId;
     if (roomId == null || _currentUserId.isEmpty || _remoteUserId.isEmpty) {
+      return;
+    }
+
+    try {
+      await _ensureCryptoReady();
+    } catch (e) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        ErrorPresenter.humanize(
+          e,
+          fallback: 'No se pudo inicializar el cifrado del chat.',
+        ),
+        state: RealtimeUxState.error,
+      );
       return;
     }
 
@@ -1690,20 +1744,67 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _buildEmojiPicker() {
-    return SizedBox(
-      height: 300,
-      child: EmojiPicker(
-        onEmojiSelected: (category, emoji) {
-          setState(() {
-            _controller.text += emoji.emoji;
-            _controller.selection = TextSelection.fromPosition(
-              TextPosition(offset: _controller.text.length),
-            );
-            _showEmojiPicker = false;
-          });
-        },
-        config: const Config(),
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Barra de cierre del teclado emoji
+        Container(
+          color: Theme.of(context).colorScheme.surface,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Emojis',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+              Row(
+                children: [
+                  // Botón de borrar último emoji
+                  IconButton(
+                    icon: const Icon(Icons.backspace_outlined, size: 20),
+                    tooltip: 'Borrar',
+                    onPressed: () {
+                      final text = _controller.text;
+                      if (text.isEmpty) return;
+                      setState(() {
+                        // Borra el último carácter (o emoji multi-byte)
+                        final chars = text.characters;
+                        _controller.text = chars
+                            .take(chars.length - 1)
+                            .toString();
+                        _controller.selection = TextSelection.fromPosition(
+                          TextPosition(offset: _controller.text.length),
+                        );
+                      });
+                    },
+                  ),
+                  // Botón de cerrar picker
+                  IconButton(
+                    icon: const Icon(Icons.keyboard_hide_outlined, size: 22),
+                    tooltip: 'Cerrar emojis',
+                    onPressed: () => setState(() => _showEmojiPicker = false),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 270,
+          child: EmojiPicker(
+            onEmojiSelected: (category, emoji) {
+              setState(() {
+                _controller.text += emoji.emoji;
+                _controller.selection = TextSelection.fromPosition(
+                  TextPosition(offset: _controller.text.length),
+                );
+              });
+            },
+            config: const Config(),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1879,6 +1980,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     throw lastError ?? StateError('Firestore operation failed');
   }
 
+  Future<void> _ensureCryptoReady() async {
+    try {
+      _cryptoInitFuture ??= _crypto.initialize();
+      await _cryptoInitFuture;
+    } catch (e) {
+      throw StateError('Fallo la inicializacion del cifrado del chat: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1930,7 +2040,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               absorbing: _uploading,
               child: Column(
                 children: [
-                  if (_connectionStateLabel.isNotEmpty && _connectionState != RealtimeUxState.online)
+                  if (_connectionStateLabel.isNotEmpty &&
+                      _connectionState != RealtimeUxState.online)
                     ErrorPresenter.buildStatusStrip(
                       state: _connectionState,
                       message: _connectionStateLabel,

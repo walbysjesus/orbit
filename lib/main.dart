@@ -4,6 +4,8 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -19,6 +21,7 @@ import 'screens/auth/register_screen.dart';
 import 'screens/communication/chat_screen.dart';
 import 'screens/communication/call_initiate_screen.dart';
 import 'screens/communication/call_receiver_screen.dart';
+import 'screens/communication/video_call_screen.dart';
 import 'screens/communication/video_call_screen_production.dart';
 import 'screens/communication/call_history_screen.dart';
 import 'screens/home/home_screen.dart';
@@ -28,6 +31,8 @@ import 'services/auth_service.dart';
 import 'services/fcm_service.dart';
 import 'services/remote_config_service.dart';
 import 'services/crashlytics_service.dart';
+import 'services/call_session_service.dart';
+import 'utils/firebase_auth_validator.dart';
 
 /// Punto de entrada principal de la app Orbit.
 /// Inicializa Firebase y FCM (notificaciones push) con control de errores automático.
@@ -90,6 +95,11 @@ void main() async {
   }
 
   WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Diagnosticar Firebase si en debug mode
+    if (kDebugMode) {
+      unawaited(FirebaseAuthValidator.printDiagnostics());
+    }
+    
     FCMService.initialize().catchError(
       (e) => debugPrint('FCM init error: $e'),
     );
@@ -160,22 +170,74 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   late Locale _locale;
+  StreamSubscription<User?>? _authStateSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _incomingCallSub;
+  String? _activeIncomingCallId;
 
   @override
   void initState() {
     super.initState();
     _locale = localeNotifier.value;
     localeNotifier.addListener(_onLocaleChanged);
+    _bindIncomingCallListener();
+    _authStateSub = FirebaseAuth.instance.authStateChanges().listen((_) {
+      _bindIncomingCallListener();
+    });
   }
 
   @override
   void dispose() {
+    _authStateSub?.cancel();
+    _incomingCallSub?.cancel();
     localeNotifier.removeListener(_onLocaleChanged);
     super.dispose();
   }
 
   void _onLocaleChanged() {
     if (mounted) setState(() => _locale = localeNotifier.value);
+  }
+
+  void _bindIncomingCallListener() {
+    _incomingCallSub?.cancel();
+    _incomingCallSub = CallSessionService.incomingRingingStream().listen((snap) {
+      if (snap.docs.isEmpty) return;
+
+      final callDoc = snap.docs.first;
+      final data = callDoc.data();
+      final status = (data['status'] as String?)?.trim();
+      if (status != 'ringing') return;
+      if (_activeIncomingCallId == callDoc.id) return;
+
+      final callerId = (data['callerId'] ?? '').toString().trim();
+      if (callerId.isEmpty) return;
+      if (FCMService.isIncomingCallSessionActive(callDoc.id)) return;
+
+      final callType = (data['callType'] ?? 'voice').toString().trim();
+      final callerName = (data['callerName'] ?? '').toString().trim();
+      final nav = FCMService.navigatorKey.currentState;
+      if (nav == null) return;
+      FCMService.markIncomingCallSessionActive(callDoc.id);
+      _activeIncomingCallId = callDoc.id;
+      nav
+          .push(
+        MaterialPageRoute(
+          builder: (_) => VideoCallScreen(
+            remoteUserId: callerId,
+            initialRemoteDisplayName:
+                callerName.isEmpty ? 'Usuario' : callerName,
+            callSessionId: callDoc.id,
+            isCaller: false,
+            audioOnly: callType != 'video',
+          ),
+        ),
+      )
+          .whenComplete(() {
+        FCMService.clearIncomingCallSessionActive(callDoc.id);
+        if (_activeIncomingCallId == callDoc.id) {
+          _activeIncomingCallId = null;
+        }
+      });
+    });
   }
 
   @override

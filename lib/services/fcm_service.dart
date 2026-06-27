@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'package:orbit/firebase/firebase_init.dart';
+import 'package:orbit/screens/communication/video_call_screen.dart';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -54,6 +55,7 @@ class FCMService {
   static Future<void>? _initializationFuture;
   static bool _localNotificationsReady = false;
   static String? _activeChatPeerId;
+  static String? _activeIncomingCallSessionId;
 
   static const String _chatRoute = '/chat';
 
@@ -61,6 +63,20 @@ class FCMService {
     final normalized = (peerUid ?? '').trim();
     _activeChatPeerId = normalized.isEmpty ? null : normalized;
     debugPrint('[FCM] Active chat peer: ${_activeChatPeerId ?? 'none'}');
+  }
+
+  static bool isIncomingCallSessionActive(String callSessionId) {
+    return _activeIncomingCallSessionId == callSessionId;
+  }
+
+  static void markIncomingCallSessionActive(String callSessionId) {
+    _activeIncomingCallSessionId = callSessionId;
+  }
+
+  static void clearIncomingCallSessionActive(String callSessionId) {
+    if (_activeIncomingCallSessionId == callSessionId) {
+      _activeIncomingCallSessionId = null;
+    }
   }
 
   /// Inicializa FCM, solicita permisos y configura listeners.
@@ -234,15 +250,20 @@ class FCMService {
     RemoteMessage message,
   ) async {
     if (!_localNotificationsReady) return;
+    final type = (message.data['type'] ?? '').toString().trim();
+    final isIncomingCall = type == 'incoming_call';
 
     final title =
-        (message.notification?.title ?? message.data['senderName'] ?? 'Orbit')
+        (message.notification?.title ??
+                message.data['senderName'] ??
+                message.data['callerName'] ??
+                'Orbit')
             .toString()
             .trim();
     final body = (message.notification?.body ??
             message.data['preview'] ??
             message.data['body'] ??
-            'Nuevo mensaje')
+            (isIncomingCall ? 'Llamada entrante' : 'Nuevo mensaje'))
         .toString()
         .trim();
 
@@ -258,14 +279,19 @@ class FCMService {
       body,
       NotificationDetails(
         android: AndroidNotificationDetails(
-          _chatChannel.id,
-          _chatChannel.name,
-          channelDescription: _chatChannel.description,
+          isIncomingCall ? _callsChannel.id : _chatChannel.id,
+          isIncomingCall ? _callsChannel.name : _chatChannel.name,
+          channelDescription: isIncomingCall
+              ? _callsChannel.description
+              : _chatChannel.description,
           importance: Importance.max,
           priority: Priority.max,
           playSound: true,
           enableVibration: true,
-          category: AndroidNotificationCategory.message,
+          fullScreenIntent: isIncomingCall,
+          category: isIncomingCall
+              ? AndroidNotificationCategory.call
+              : AndroidNotificationCategory.message,
         ),
       ),
       payload: jsonEncode(payloadData),
@@ -286,10 +312,12 @@ class FCMService {
   static void _handleNotificationTapData(Map<String, dynamic> data) {
     final type = (data['type'] ?? '').toString().trim();
     final roomId = (data['roomId'] ?? '').toString().trim();
-    final senderId = (data['senderId'] ?? '').toString().trim();
-    final senderName = (data['senderName'] ?? '').toString().trim();
-    final callId = (data['callId'] ?? '').toString().trim();
-    final isVideo = (data['isVideo'] ?? 'false').toString().toLowerCase() == 'true';
+    final senderId = (data['senderId'] ?? data['callerId'] ?? '')
+        .toString()
+        .trim();
+    final senderName = (data['senderName'] ?? data['callerName'] ?? '')
+        .toString()
+        .trim();
 
     final nav = navigatorKey.currentState;
     if (nav == null) {
@@ -298,18 +326,8 @@ class FCMService {
     }
 
     // Manejar llamadas entrantes
-    if (type == 'incoming_call' && callId.isNotEmpty && senderId.isNotEmpty) {
-      debugPrint('[FCM] Navegando a incoming call: callId=$callId, caller=$senderName');
-      nav.pushNamed(
-        '/call-receiver',
-        arguments: {
-          'callId': callId,
-          'callerId': senderId,
-          'callerName': senderName.isEmpty ? 'Usuario' : senderName,
-          'callerPhoto': data['callerPhoto'],
-          'isVideo': isVideo,
-        },
-      );
+    if (type == 'incoming_call') {
+      _openIncomingCallScreen(data);
       return;
     }
 
@@ -326,6 +344,52 @@ class FCMService {
         'initialContactName': senderName,
       },
     );
+  }
+
+  static void _openIncomingCallScreen(Map<String, dynamic> data) {
+    final nav = navigatorKey.currentState;
+    if (nav == null) return;
+
+    final callSessionId = (data['callSessionId'] ?? data['callId'] ?? '')
+        .toString()
+        .trim();
+    final callerId = (data['callerId'] ?? data['senderId'] ?? '')
+        .toString()
+        .trim();
+    if (callSessionId.isEmpty || callerId.isEmpty) {
+      debugPrint(
+          '[FCM] incoming_call incompleto: callSessionId=$callSessionId callerId=$callerId');
+      return;
+    }
+    if (isIncomingCallSessionActive(callSessionId)) {
+      return;
+    }
+
+    final callerName = (data['callerName'] ?? data['senderName'] ?? '')
+        .toString()
+        .trim();
+    final callType = (data['callType'] ?? '').toString().trim().toLowerCase();
+    final isVideoFlag =
+        (data['isVideo'] ?? 'false').toString().toLowerCase() == 'true';
+    final audioOnly = !(callType == 'video' || isVideoFlag);
+
+    markIncomingCallSessionActive(callSessionId);
+    nav
+        .push(
+      MaterialPageRoute(
+        builder: (_) => VideoCallScreen(
+          remoteUserId: callerId,
+          initialRemoteDisplayName:
+              callerName.isEmpty ? 'Usuario' : callerName,
+          callSessionId: callSessionId,
+          isCaller: false,
+          audioOnly: audioOnly,
+        ),
+      ),
+    )
+        .whenComplete(() {
+      clearIncomingCallSessionActive(callSessionId);
+    });
   }
 
   static Future<void> _saveTokenToFirestore(String token) async {

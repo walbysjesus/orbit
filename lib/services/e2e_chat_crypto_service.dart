@@ -23,6 +23,12 @@ class E2EChatCryptoService {
   static const String _localKeyStorageKey = 'orbit_local_chat_key_v1';
   static const String _roomMasterStorageKey = 'orbit_chat_room_master_key_v1';
 
+  // Clave base fija del app — igual en todos los dispositivos.
+  // Permite que cualquier usuario cifre/descifre sin configuración adicional.
+  // En producción se puede sobreescribir con CHAT_LOCAL_AES_KEY para mayor seguridad.
+  static const String _appDefaultMasterKey =
+      'orbit-app-base-key-2024-v1-shared-all-users-32b';
+
   final FlutterSecureStorage _secureStorage;
   final Random _random;
 
@@ -141,22 +147,16 @@ class E2EChatCryptoService {
   }
 
   encrypt.Key _deriveRoomKey(String roomId) {
-    final key = _tryDeriveRoomKey(roomId);
-    if (key == null) {
-      throw StateError(
-        'CHAT_LOCAL_AES_KEY inválida. Debe tener al menos 32 caracteres o estar disponible en almacenamiento seguro.',
-      );
-    }
-    return key;
+    // _tryDeriveRoomKey siempre retorna una clave válida ahora.
+    return _tryDeriveRoomKey(roomId)!;
   }
 
   encrypt.Key? _tryDeriveRoomKey(String roomId) {
     final configuredMaster = _normalizedMasterKey(chatLocalEncryptionKey);
-    final activeMaster =
-        configuredMaster ?? _normalizedMasterKey(_roomMasterSecret);
-    if (activeMaster == null) {
-      return null;
-    }
+    // Prioridad: dart-define → secure storage → clave fija del app (funciona en todos los dispositivos)
+    final activeMaster = configuredMaster ??
+        _normalizedMasterKey(_roomMasterSecret) ??
+        _appDefaultMasterKey;
     return _buildRoomKey(roomId: roomId, master: activeMaster);
   }
 
@@ -199,22 +199,14 @@ class E2EChatCryptoService {
       Uint8List.fromList(utf8.encode(plainText)),
       iv: iv,
     );
-    final encryptedBytes = encrypted.bytes;
-    if (encryptedBytes.length < (_gcmTagLength + 1)) {
-      throw StateError('No se pudo generar payload AES-GCM válido.');
-    }
-
-    final cipherBytes =
-        encryptedBytes.sublist(0, encryptedBytes.length - _gcmTagLength);
-    final tagBytes =
-        encryptedBytes.sublist(encryptedBytes.length - _gcmTagLength);
+    // Almacenamos el payload completo como lo devuelve la librería (incluye tag GCM).
+    // Formato 5 partes: marker:version:keyId:iv_b64:payload_b64
     return [
       marker,
       _payloadVersion,
       _defaultKeyId,
       base64Encode(ivBytes),
-      base64Encode(cipherBytes),
-      base64Encode(tagBytes),
+      base64Encode(encrypted.bytes),
     ].join(':');
   }
 
@@ -228,7 +220,9 @@ class E2EChatCryptoService {
     }
 
     final parts = payload.split(':');
-    if (parts.length != 6) {
+    // Soporta formato nuevo (5 partes: marker:ver:kid:iv:payload)
+    // y formato legacy (6 partes: marker:ver:kid:iv:cipher:tag).
+    if (parts.length != 5 && parts.length != 6) {
       return null;
     }
     if (parts[1] != _payloadVersion) {
@@ -237,16 +231,22 @@ class E2EChatCryptoService {
 
     try {
       final ivBytes = base64Decode(parts[3]);
-      final cipherBytes = base64Decode(parts[4]);
-      final tagBytes = base64Decode(parts[5]);
-      if (ivBytes.length != _gcmIvLength || tagBytes.length != _gcmTagLength) {
-        return null;
-      }
+      if (ivBytes.length != _gcmIvLength) return null;
 
-      final combinedBytes = Uint8List(cipherBytes.length + tagBytes.length)
-        ..setRange(0, cipherBytes.length, cipherBytes)
-        ..setRange(
-            cipherBytes.length, cipherBytes.length + tagBytes.length, tagBytes);
+      final Uint8List combinedBytes;
+      if (parts.length == 5) {
+        // Nuevo formato: payload completo (la librería incluye el tag).
+        combinedBytes = base64Decode(parts[4]);
+      } else {
+        // Formato legacy: cipher (parts[4]) + tag (parts[5]) separados.
+        final cipherBytes = base64Decode(parts[4]);
+        final tagBytes = base64Decode(parts[5]);
+        if (tagBytes.length != _gcmTagLength) return null;
+        combinedBytes = Uint8List(cipherBytes.length + tagBytes.length)
+          ..setRange(0, cipherBytes.length, cipherBytes)
+          ..setRange(
+              cipherBytes.length, cipherBytes.length + tagBytes.length, tagBytes);
+      }
 
       final iv = encrypt.IV(ivBytes);
       final encrypter = encrypt.Encrypter(

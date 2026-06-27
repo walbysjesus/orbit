@@ -374,7 +374,8 @@ class FirestoreSignaling {
         if (cand is Map<String, dynamic>) {
           _pendingLocalCandidates.add({
             ...cand,
-            'createdAt': FieldValue.serverTimestamp(),
+            // Firestore no admite sentinels (serverTimestamp) dentro de arrays.
+            'createdAt': Timestamp.now(),
           });
           _candidateFlushTimer?.cancel();
           _candidateFlushTimer = Timer(const Duration(milliseconds: 250), () {

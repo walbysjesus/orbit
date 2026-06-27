@@ -62,7 +62,6 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadUserDisplay();
     _refreshNetworkInsight();
-    _listenForIncomingCalls();
     _ensureOrbitNumberPresent();
     _networkTimer = Timer.periodic(
       const Duration(seconds: 20),
@@ -783,7 +782,6 @@ class _HomeScreenState extends State<HomeScreen> {
               message: _homeRealtimeMessage,
               onRetry: () {
                 _refreshNetworkInsight();
-                _listenForIncomingCalls();
               },
             ),
             // ── Barra compacta superior: Señal + IA ──────────────
@@ -1073,7 +1071,7 @@ class _RecentChatsList extends StatelessWidget {
   }
 }
 
-class _ChatRoomTile extends StatelessWidget {
+class _ChatRoomTile extends StatefulWidget {
   final String otherUid;
   final String lastMessage;
   final String lastMessageType;
@@ -1091,23 +1089,36 @@ class _ChatRoomTile extends StatelessWidget {
   });
 
   @override
+  State<_ChatRoomTile> createState() => _ChatRoomTileState();
+}
+
+class _ChatRoomTileState extends State<_ChatRoomTile> {
+  late final Future<DocumentSnapshot<Map<String, dynamic>>> _userFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _userFuture = FirebaseFirestore.instance
+        .collection('users_public')
+        .doc(widget.otherUid)
+        .get();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      future: FirebaseFirestore.instance
-          .collection('users_public')
-          .doc(otherUid)
-          .get(),
+      future: _userFuture,
       builder: (context, userSnap) {
         final userData = userSnap.data?.data();
-        final name =
-            (userData?['fullName'] as String?)?.trim().isNotEmpty == true
-                ? userData!['fullName'] as String
-                : otherUid;
+        final publicName = (userData?['fullName'] as String?)?.trim() ?? '';
+        final displayName =
+            publicName.isNotEmpty ? publicName : 'Contacto Orbit';
+        final name = displayName;
         final initials = name.isNotEmpty ? name[0].toUpperCase() : '?';
 
         String timeStr = '';
-        if (updatedAt is Timestamp) {
-          final dt = (updatedAt as Timestamp).toDate();
+        if (widget.updatedAt is Timestamp) {
+          final dt = (widget.updatedAt as Timestamp).toDate();
           final now = DateTime.now();
           if (dt.year == now.year &&
               dt.month == now.month &&
@@ -1119,14 +1130,14 @@ class _ChatRoomTile extends StatelessWidget {
           }
         }
 
-        String preview = lastMessage;
-        if (lastMessageType == 'image') preview = '📷 Imagen';
-        if (lastMessageType == 'audio') preview = '🎤 Audio';
-        if (lastMessageType == 'file') preview = '📎 Archivo';
+        String preview = widget.lastMessage;
+        if (widget.lastMessageType == 'image') preview = '📷 Imagen';
+        if (widget.lastMessageType == 'audio') preview = '🎤 Audio';
+        if (widget.lastMessageType == 'file') preview = '📎 Archivo';
         if (preview.isEmpty) preview = 'Toca para abrir el chat';
 
         return InkWell(
-          onTap: () => onTap(name),
+          onTap: () => widget.onTap(name),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             child: Row(
@@ -1162,7 +1173,7 @@ class _ChatRoomTile extends StatelessWidget {
                         name,
                         style: TextStyle(
                           color: const Color(0xFF16324F),
-                          fontWeight: unreadCount > 0
+                          fontWeight: widget.unreadCount > 0
                               ? FontWeight.w700
                               : FontWeight.w500,
                           fontSize: 15,
@@ -1174,11 +1185,11 @@ class _ChatRoomTile extends StatelessWidget {
                       Text(
                         preview,
                         style: TextStyle(
-                          color: unreadCount > 0
+                          color: widget.unreadCount > 0
                               ? const Color(0xFF0A4D8F)
                               : const Color(0xFF8AA4BF),
                           fontSize: 13,
-                          fontWeight: unreadCount > 0
+                          fontWeight: widget.unreadCount > 0
                               ? FontWeight.w500
                               : FontWeight.normal,
                         ),
@@ -1195,13 +1206,13 @@ class _ChatRoomTile extends StatelessWidget {
                     Text(
                       timeStr,
                       style: TextStyle(
-                        color: unreadCount > 0
+                        color: widget.unreadCount > 0
                             ? const Color(0xFF0A4D8F)
                             : const Color(0xFFADBCC9),
                         fontSize: 11,
                       ),
                     ),
-                    if (unreadCount > 0) ...[
+                    if (widget.unreadCount > 0) ...[
                       const SizedBox(height: 4),
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -1213,7 +1224,9 @@ class _ChatRoomTile extends StatelessWidget {
                           shape: BoxShape.circle,
                         ),
                         child: Text(
-                          unreadCount > 99 ? '99+' : '$unreadCount',
+                          widget.unreadCount > 99
+                              ? '99+'
+                              : '${widget.unreadCount}',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 10,

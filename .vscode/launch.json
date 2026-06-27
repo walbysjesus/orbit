@@ -1,0 +1,18 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Orbit Debug Android (SM M127F)",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug",
+      "deviceId": "RF8R50A7L3V",
+      "toolArgs": [
+        "--dart-define=TURN_URL=turn:global.relay.metered.ca:443",
+        "--dart-define=TURN_USERNAME=e70cbac304a68ec4f92ff805",
+        "--dart-define=TURN_CREDENTIAL=h/jquALTyVnBtiWN",
+        "--dart-define=CHAT_LOCAL_AES_KEY=orbit-shared-debug-chat-key-2024v1"
+      ]
+    }
+  ]
+}

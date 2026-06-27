@@ -41,6 +41,14 @@ class ErrorPresenter {
               : fallback;
       }
     }
+    if (error is StateError) {
+      final msg = error.message?.toString().trim() ?? '';
+      return msg.isNotEmpty ? msg : fallback;
+    }
+    if (error is ArgumentError) {
+      final msg = error.message?.toString().trim() ?? '';
+      return msg.isNotEmpty ? msg : fallback;
+    }
     return fallback;
   }
 

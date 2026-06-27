@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math';
 
 import 'package:audioplayers/audioplayers.dart';
@@ -25,7 +25,7 @@ import '../../utils/error_presenter.dart';
 // Variables globales eliminadas, deben estar dentro del State
 
 class VideoCallScreen extends StatefulWidget {
-  /// ID único de la sala WebRTC. Si no se provee, la pantalla genera uno temporal.
+  /// ID Ãºnico de la sala WebRTC. Si no se provee, la pantalla genera uno temporal.
   final String? roomId;
 
   /// UID del usuario remoto (para mostrar en UI y enrutar sala).
@@ -37,10 +37,10 @@ class VideoCallScreen extends StatefulWidget {
   /// Si es true, inicia una llamada de voz (sin video local/remoto).
   final bool audioOnly;
 
-  /// Fuerza rol de iniciador para evitar oferta simultánea.
+  /// Fuerza rol de iniciador para evitar oferta simultÃ¡nea.
   final bool? isCaller;
 
-  /// ID de sesión en Firestore para seguimiento de estado (ringing/accepted/ended).
+  /// ID de sesiÃ³n en Firestore para seguimiento de estado (ringing/accepted/ended).
   final String? callSessionId;
 
   const VideoCallScreen({
@@ -106,21 +106,16 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   Timer? _iceHeartbeatTimer;
   Timer? _ringTimeoutTimer;
   Timer? _connectTimeoutTimer;
-  String _networkLabel = 'Analizando señal...';
+  String _networkLabel = 'Analizando se\u00f1al...';
   Color _networkColor = const Color(0xFF8FA9C2);
   bool _isSatelliteNetwork = false;
   int? _latencyMs;
-  NetworkQuality _networkQuality = NetworkQuality.unknown;
   bool _videoDegraded = false;
   bool _controlsExpanded = false;
-  RealtimeUxState _callRealtimeState = RealtimeUxState.reconnecting;
-  String _callRealtimeMessage = 'Conectando llamada...';
   String _sessionStatus = 'n/d';
   String _iceStatus = 'n/d';
   String _pcStatus = 'n/d';
   String _signalStatus = 'n/d';
-  String _localPathType = 'n/d';
-  String _remotePathType = 'n/d';
   int _localCandidateCount = 0;
   int _remoteCandidateCount = 0;
   bool _remoteDescriptionSet = false;
@@ -178,6 +173,9 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
+    // Initialize _roomId early before any logging
+    _roomId = widget.roomId ?? 'room_${DateTime.now().millisecondsSinceEpoch}';
+
     // ========== PHASE 2: TURN/STUN VALIDATION ==========
     // Block calls in release mode if TURN not configured
     final turnError = TurnStunConfig.shouldBlockCallInRelease();
@@ -234,7 +232,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     final issues = getRealtimeConfigIssues(forRelease: false);
     if (issues.isEmpty) return;
     _showBanner(
-      'Configuración recomendada pendiente: ${issues.join(' · ')}',
+      'ConfiguraciÃ³n recomendada pendiente: ${issues.join(' Â· ')}',
       Colors.orangeAccent,
       persistent: true,
     );
@@ -249,7 +247,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     Color color;
     switch (quality) {
       case NetworkQuality.none:
-        label = 'Sin señal';
+        label = 'Sin seÃ±al';
         color = const Color(0xFFE16B6B);
         break;
       case NetworkQuality.low:
@@ -257,22 +255,22 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         color = const Color(0xFFFFB46A);
         break;
       case NetworkQuality.medium:
-        label = 'Señal media';
+        label = 'SeÃ±al media';
         color = const Color(0xFFECCB6A);
         break;
       case NetworkQuality.high:
-        label = 'Señal alta';
+        label = 'SeÃ±al alta';
         color = const Color(0xFF63D9B3);
         break;
       case NetworkQuality.unknown:
-        label = 'Señal desconocida';
+        label = 'SeÃ±al desconocida';
         color = const Color(0xFF8FA9C2);
         break;
     }
 
-    // Si es satélite, agregar indicador
+    // Si es satÃ©lite, agregar indicador
     if (isSatellite) {
-      label = '$label · 🛰️ Satélite';
+      label = '$label Â· ðŸ›°ï¸ SatÃ©lite';
     }
 
     final nextProfile = _networkService.getAdaptiveCallProfile(
@@ -287,16 +285,16 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     );
 
     if (nextProfile.batterySaver) {
-      label = '$label · ahorro';
+      label = '$label Â· ahorro';
     }
     if (nextProfile.thermalLevel == ThermalLevel.hot ||
         nextProfile.thermalLevel == ThermalLevel.critical) {
-      label = '$label · térmico alto';
+      label = '$label Â· tÃ©rmico alto';
     }
 
     if (!mounted) return;
     setState(() {
-      _networkLabel = latency == null ? label : '$label · $latency ms';
+      _networkLabel = latency == null ? label : '$label Â· $latency ms';
       _networkColor = color;
       _latencyMs = latency;
       _isSatelliteNetwork = isSatellite;
@@ -469,13 +467,13 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         try {
           track.stop();
         } catch (e) {
-          _logRtc('⚠️ Error stopping track: $e');
+          _logRtc('âš ï¸ Error stopping track: $e');
         }
       }
       try {
         _localStream!.dispose();
       } catch (e) {
-        _logRtc('⚠️ Error disposing stream: $e');
+        _logRtc('âš ï¸ Error disposing stream: $e');
       }
       _localStream = null;
     }
@@ -487,7 +485,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       _peerConnection?.close();
       _peerConnection?.dispose();
     } catch (e) {
-      _logRtc('⚠️ Error closing peer connection: $e');
+      _logRtc('âš ï¸ Error closing peer connection: $e');
     }
     _peerConnection = null;
 
@@ -497,7 +495,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       unawaited(_setNativeNormalAudioMode());
       unawaited(_signaling.close());
     } catch (e) {
-      _logRtc('⚠️ Error closing signaling: $e');
+      _logRtc('âš ï¸ Error closing signaling: $e');
     }
 
     // 8. Stop animation and audio
@@ -510,7 +508,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       unawaited(_ringPlayer.release());
       unawaited(_ringPlayer.dispose());
     } catch (e) {
-      _logRtc('⚠️ Error disposing audio player: $e');
+      _logRtc('âš ï¸ Error disposing audio player: $e');
     }
 
     // 10. Dispose renderers
@@ -518,7 +516,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       _localRenderer.dispose();
       _remoteRenderer.dispose();
     } catch (e) {
-      _logRtc('⚠️ Error disposing renderers: $e');
+      _logRtc('âš ï¸ Error disposing renderers: $e');
     }
 
     _ringtonePlaying = false;
@@ -583,7 +581,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
           false;
       if (!ignoringBattery && mounted) {
         _showBanner(
-          'Recomendado: desactivar optimización de batería para llamadas estables',
+          'Recomendado: desactivar optimizaciÃ³n de baterÃ­a para llamadas estables',
           Colors.orangeAccent,
           onRetry: () {
             unawaited(
@@ -604,7 +602,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                   manufacturer.contains('oneplus'));
       if (needsOemGuidance && mounted) {
         _showBanner(
-          'Activa auto-inicio en ajustes OEM para mejorar recepción de llamadas',
+          'Activa auto-inicio en ajustes OEM para mejorar recepciÃ³n de llamadas',
           Colors.blueGrey,
           onRetry: () {
             unawaited(
@@ -733,7 +731,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       _listenCallSession(createdId);
       _armConnectTimeout();
 
-      // Timer: si en 30s no contestó, cancelar y volver.
+      // Timer: si en 30s no contestÃ³, cancelar y volver.
       _ringTimeoutTimer = Timer(const Duration(seconds: 30), () async {
         if (!mounted) return; // lifecycle safety fix
         _stopOutgoingRingtone();
@@ -747,7 +745,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     } catch (_) {
       if (!mounted) return;
       unawaited(_auditCall('session_create_failed'));
-      _showBanner('No se pudo crear sesión de llamada', Colors.orangeAccent);
+      _showBanner('No se pudo crear sesiÃ³n de llamada', Colors.orangeAccent);
     }
   }
 
@@ -791,7 +789,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         _connectTimeoutTimer?.cancel();
         _stopOutgoingRingtone();
         unawaited(_cleanupSignalingRoomIfNeeded());
-        _showBanner('La llamada finalizó', Colors.blueGrey);
+        _showBanner('La llamada finalizÃ³', Colors.blueGrey);
         Navigator.of(context).pop();
       }
     });
@@ -804,7 +802,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       if (mounted) {
         setState(() {
           _callRealtimeState = RealtimeUxState.timeout;
-          _callRealtimeMessage = 'Timeout de conexión. Reintentando...';
+          _callRealtimeMessage = 'Timeout de conexiÃ³n. Reintentando...';
         });
       }
       _logRtc('timeout: no se establecio conexion en 45s');
@@ -890,10 +888,10 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         return;
       }
 
-      // Mostrar advertencia si está en satélite
+      // Mostrar advertencia si estÃ¡ en satÃ©lite
       if (_isSatelliteNetwork) {
         _showBanner(
-          '🛰️ Conectado vía satélite: Alta latencia esperada (~500ms+)',
+          'ðŸ›°ï¸ Conectado vÃ­a satÃ©lite: Alta latencia esperada (~500ms+)',
           Colors.amber,
           persistent: false,
         );
@@ -909,13 +907,13 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         if (!mounted) return;
         _showBanner(error, Colors.redAccent);
       };
-      // Iniciar stream local ANTES de conectar señalización
+      // Iniciar stream local ANTES de conectar seÃ±alizaciÃ³n
       // para que el PeerConnection tenga tracks listos antes de procesar SDP.
       final permissionsOk = await _ensureMediaPermissions();
       if (!mounted) return; // lifecycle safety fix
       if (!permissionsOk) {
         unawaited(_auditCall('permissions_denied'));
-        _showBanner('Permisos de micrófono/cámara requeridos', Colors.redAccent,
+        _showBanner('Permisos de micrÃ³fono/cÃ¡mara requeridos', Colors.redAccent,
             persistent: true);
         return;
       }
@@ -923,7 +921,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       await _startLocalStream();
       if (!mounted) return; // lifecycle safety fix
 
-      // Reintentar connect con backoff para zonas remotas/satélite
+      // Reintentar connect con backoff para zonas remotas/satÃ©lite
       await _connectSignalingWithRetry();
       _logRtc('signaling conectado room=$_roomId caller=$_isCaller');
       unawaited(_auditCall('signaling_connected'));
@@ -1070,11 +1068,11 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     final remoteUid = (widget.remoteUserId ?? '').trim();
     final callType = widget.audioOnly ? 'voz' : 'video';
     final inviteLines = <String>[
-      'Invitación a llamada Orbit',
+      'InvitaciÃ³n a llamada Orbit',
       'Tipo: $callType',
       'Sala: $_roomId',
       if (_callSessionId != null && _callSessionId!.trim().isNotEmpty)
-        'Sesión: ${_callSessionId!.trim()}',
+        'SesiÃ³n: ${_callSessionId!.trim()}',
       if (_remoteTitle.isNotEmpty) 'En llamada con: $_remoteTitle',
       if (remoteUid.isNotEmpty) 'UID remoto: $remoteUid',
       '',
@@ -1085,12 +1083,12 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       await SharePlus.instance.share(
         ShareParams(
           text: inviteLines.join('\n'),
-          subject: 'Invitación a llamada Orbit',
+          subject: 'InvitaciÃ³n a llamada Orbit',
         ),
       );
     } catch (_) {
       if (!mounted) return;
-      _showBanner('No se pudo compartir la invitación', Colors.redAccent);
+      _showBanner('No se pudo compartir la invitaciÃ³n', Colors.redAccent);
     }
   }
 
@@ -1101,7 +1099,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     while (attempts < maxAttempts) {
       try {
         await _signaling.connect();
-        return; // Éxito
+        return; // Ã‰xito
       } catch (e) {
         attempts++;
         if (attempts >= maxAttempts) {
@@ -1112,7 +1110,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         final delayMs = 500 * (1 << (attempts - 1));
         if (mounted) {
           _showBanner(
-            'Reintentando conexión... (intento $attempts/$maxAttempts)',
+            'Reintentando conexiÃ³n... (intento $attempts/$maxAttempts)',
             Colors.orange,
           );
         }
@@ -1146,14 +1144,14 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         _logRtc('addTrack kind=${track.kind} enabled=${track.enabled}');
       }
 
-      // Solo el iniciador envía oferta y la reintenta cuando el otro peer entra.
+      // Solo el iniciador envÃ­a oferta y la reintenta cuando el otro peer entra.
       if (_isCaller && _remotePeerJoined) {
         await _createAndSendOffer();
       }
     } catch (e) {
       _logRtc('error getUserMedia/addTrack: $e');
       unawaited(_auditCall('media_start_failed', extra: {'error': '$e'}));
-      _showBanner('Error al iniciar cámara/micrófono', Colors.redAccent,
+      _showBanner('Error al iniciar cÃ¡mara/micrÃ³fono', Colors.redAccent,
           persistent: true, onRetry: _startLocalStream);
     }
   }
@@ -1216,7 +1214,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       }).catchError((_) {});
     };
 
-    // ── ICE connection state: detecta cortes y lanza ICE restart automático ──
+    // â”€â”€ ICE connection state: detecta cortes y lanza ICE restart automÃ¡tico â”€â”€
     _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
       if (!mounted) return;
       _logRtc('iceConnectionState=${_shortEnumValue(state)}');
@@ -1225,9 +1223,9 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
           setState(() {
             _callRealtimeState = RealtimeUxState.reconnecting;
-            _callRealtimeMessage = 'Conexión inestable. Reconectando...';
+            _callRealtimeMessage = 'ConexiÃ³n inestable. Reconectando...';
           });
-          _showBanner('Conexión inestable, reconectando...', Colors.orange);
+          _showBanner('ConexiÃ³n inestable, reconectando...', Colors.orange);
           _requestIceRecovery(
             reason: 'ice_disconnected',
             trigger: 'ice_state_disconnected',
@@ -1236,10 +1234,10 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         case RTCIceConnectionState.RTCIceConnectionStateFailed:
           setState(() {
             _callRealtimeState = RealtimeUxState.reconnecting;
-            _callRealtimeMessage = 'Conexión perdida. Reiniciando enlace...';
+            _callRealtimeMessage = 'ConexiÃ³n perdida. Reiniciando enlace...';
           });
           unawaited(_auditCall('ice_failed'));
-          _showBanner('Conexión perdida, reiniciando ICE...', Colors.orange);
+          _showBanner('ConexiÃ³n perdida, reiniciando ICE...', Colors.orange);
           _requestIceRecovery(
             reason: 'ice_failed',
             trigger: 'ice_state_failed',
@@ -1266,7 +1264,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       }
     };
 
-    // ── Connection state: segunda línea de defensa ──
+    // â”€â”€ Connection state: segunda lÃ­nea de defensa â”€â”€
     _peerConnection?.onConnectionState = (RTCPeerConnectionState state) {
       if (!mounted) return;
       _logRtc('connectionState=${_shortEnumValue(state)}');
@@ -1284,7 +1282,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         setState(() {
           _callRealtimeState = RealtimeUxState.reconnecting;
           _callRealtimeMessage =
-              'Error de conexión. Intentando recuperar llamada...';
+              'Error de conexiÃ³n. Intentando recuperar llamada...';
         });
         unawaited(_auditCall('peer_failed'));
         _requestIceRecovery(
@@ -1321,9 +1319,9 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     final now = DateTime.now();
     if (!_consumeStormBudget(now)) {
       _logRtc(
-          '🛡️ storm protection activated; trigger=$trigger reason=$reason');
+          'ðŸ›¡ï¸ storm protection activated; trigger=$trigger reason=$reason');
       _showBanner(
-        'Protección anti-tormenta activa, estabilizando reconexión...',
+        'ProtecciÃ³n anti-tormenta activa, estabilizando reconexiÃ³n...',
         Colors.orange,
       );
       return;
@@ -1357,9 +1355,9 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   }) {
     if (_iceReconnectAttempts >= _maxIceReconnectAttempts) {
       _logRtc(
-          '⚠️ ICE reconnect max attempts ($_iceReconnectAttempts/$_maxIceReconnectAttempts) reached.');
+          'âš ï¸ ICE reconnect max attempts ($_iceReconnectAttempts/$_maxIceReconnectAttempts) reached.');
       _showBanner(
-        'Conexión perdida permanentemente. Terminar llamada.',
+        'ConexiÃ³n perdida permanentemente. Terminar llamada.',
         Colors.red,
         persistent: true,
       );
@@ -1372,7 +1370,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     final jitterFactor = 0.75 + (_random.nextDouble() * 0.5);
     final finalDelayMs = (baseDelayMs * jitterFactor).round();
     _logRtc(
-        '⏱️ ICE reconnect attempt ${_iceReconnectAttempts + 1}/$_maxIceReconnectAttempts in ${finalDelayMs}ms (base=${baseDelayMs}ms jitter=${jitterFactor.toStringAsFixed(2)} reason=$reason remoteRequest=$remoteRequest)');
+        'â±ï¸ ICE reconnect attempt ${_iceReconnectAttempts + 1}/$_maxIceReconnectAttempts in ${finalDelayMs}ms (base=${baseDelayMs}ms jitter=${jitterFactor.toStringAsFixed(2)} reason=$reason remoteRequest=$remoteRequest)');
 
     _iceRestartTimer = Timer(Duration(milliseconds: finalDelayMs), () {
       _iceReconnectAttempts++;
@@ -1412,10 +1410,10 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       if (healthy) return;
 
       _logRtc(
-          '⏱️ ICE recovery timeout reason=$reason remoteRequest=$remoteRequest');
-      _showBanner('Reintento inteligente de conexión...', Colors.orange);
+          'â±ï¸ ICE recovery timeout reason=$reason remoteRequest=$remoteRequest');
+      _showBanner('Reintento inteligente de conexiÃ³n...', Colors.orange);
       if (!_isCaller && !remoteRequest) {
-        // Escalación: si el caller no reaccionó al restartIce, el callee también
+        // EscalaciÃ³n: si el caller no reaccionÃ³ al restartIce, el callee tambiÃ©n
         // puede forzar ICE restart para recuperar la llamada.
         _scheduleIceRestart(remoteRequest: true, reason: 'timeout_escalation');
         return;
@@ -1485,7 +1483,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         '${_isCaller ? 'caller' : 'callee'}_${now.microsecondsSinceEpoch}_${_random.nextInt(1 << 20)}';
     _handledRestartRequestIds.add(requestId);
     _logRtc(
-        '📡 send restartIce requestId=$requestId trigger=$trigger reason=$reason');
+        'ðŸ“¡ send restartIce requestId=$requestId trigger=$trigger reason=$reason');
     await _signaling.send({
       'type': 'restartIce',
       'requestId': requestId,
@@ -1500,10 +1498,10 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   }) async {
     _cancelIceRestartTimer();
     if (_peerConnection == null) {
-      _logRtc('⚠️ ICE restart skipped: no peer connection');
+      _logRtc('âš ï¸ ICE restart skipped: no peer connection');
       return;
     }
-    // Si es callee y no es remoteRequest, señaliza al peer para que reinicie
+    // Si es callee y no es remoteRequest, seÃ±aliza al peer para que reinicie
     if (!_isCaller && !remoteRequest) {
       await _sendRestartIceSignal(
         reason: reason,
@@ -1513,7 +1511,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     }
     try {
       _logRtc(
-          '🔄 ICE restart attempt $_iceReconnectAttempts/$_maxIceReconnectAttempts: createOffer (isCaller=$_isCaller, remoteRequest=$remoteRequest, reason=$reason)');
+          'ðŸ”„ ICE restart attempt $_iceReconnectAttempts/$_maxIceReconnectAttempts: createOffer (isCaller=$_isCaller, remoteRequest=$remoteRequest, reason=$reason)');
       final offer = await _peerConnection!.createOffer({'iceRestart': true});
       if (offer.sdp == null || offer.sdp!.isEmpty) {
         throw Exception('Invalid offer SDP');
@@ -1525,7 +1523,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       );
       final optimizedOffer = RTCSessionDescription(optimizedSdp, 'offer');
       await _peerConnection!.setLocalDescription(optimizedOffer);
-      _logRtc('✅ ICE restart localDescription set');
+      _logRtc('âœ… ICE restart localDescription set');
       await _signaling.send({
         'type': 'offer',
         'sdp': optimizedSdp,
@@ -1533,10 +1531,10 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         const Duration(seconds: 5),
         onTimeout: () => throw TimeoutException('Signaling send timeout'),
       );
-      _logRtc('✅ ICE restart offer sent');
+      _logRtc('âœ… ICE restart offer sent');
     } on TimeoutException catch (_) {
-      _logRtc('⏱️ ICE restart timeout, scheduling retry...');
-      _showBanner('Reintentando conexión (timeout)...', Colors.orange);
+      _logRtc('â±ï¸ ICE restart timeout, scheduling retry...');
+      _showBanner('Reintentando conexiÃ³n (timeout)...', Colors.orange);
       if (_iceReconnectAttempts < _maxIceReconnectAttempts) {
         _scheduleIceRestart(
           remoteRequest: remoteRequest,
@@ -1544,16 +1542,16 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         );
       }
     } catch (e) {
-      _logRtc('❌ ICE restart failed: $e');
+      _logRtc('âŒ ICE restart failed: $e');
       _showBanner(
-          'No se pudo reiniciar la conexión, reintentando...', Colors.orange);
+          'No se pudo reiniciar la conexiÃ³n, reintentando...', Colors.orange);
       if (_iceReconnectAttempts < _maxIceReconnectAttempts) {
         _scheduleIceRestart(
           remoteRequest: remoteRequest,
           reason: 'restart_failed',
         );
       } else {
-        _showBanner('Conexión perdida permanentemente', Colors.red,
+        _showBanner('ConexiÃ³n perdida permanentemente', Colors.red,
             persistent: true);
       }
     }
@@ -1643,12 +1641,12 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       case 'candidate':
         final cand = msg['candidate'];
         if (cand is! Map) {
-          _logRtc('candidate inválido ignorado');
+          _logRtc('candidate invÃ¡lido ignorado');
           return;
         }
         final candidateValue = (cand['candidate'] ?? '').toString();
         if (candidateValue.isEmpty) {
-          _logRtc('candidate vacío ignorado');
+          _logRtc('candidate vacÃ­o ignorado');
           return;
         }
         final remoteCandidate = (cand['candidate'] ?? '').toString();
@@ -1702,7 +1700,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       // STABILIZATION: Limit ICE buffer to prevent memory exhaustion
       if (_pendingRemoteCandidates.length >= _maxPendingIceCandidates) {
         _logRtc(
-            '⚠️ ICE buffer FULL (${_pendingRemoteCandidates.length}/$_maxPendingIceCandidates). Dropping oldest candidate.');
+            'âš ï¸ ICE buffer FULL (${_pendingRemoteCandidates.length}/$_maxPendingIceCandidates). Dropping oldest candidate.');
         _pendingRemoteCandidates.removeAt(0); // Remove oldest (FIFO drop)
       }
       _pendingRemoteCandidates.add(candidate);
@@ -1829,7 +1827,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   }
 
   void _toggleSpeaker() {
-    // flutter_webrtc maneja el altavoz en dispositivos móviles con setSpeakerphoneOn
+    // flutter_webrtc maneja el altavoz en dispositivos mÃ³viles con setSpeakerphoneOn
     unawaited(_configureAudioRouting());
   }
 
@@ -1897,20 +1895,20 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                     Padding(
                       padding: const EdgeInsets.only(top: 12),
                       child: Semantics(
-                        label: 'Duración de la llamada',
+                        label: 'DuraciÃ³n de la llamada',
                         child: Text(
                             _stopwatch.isRunning
-                                ? '⏱ $_callDuration'
+                                ? 'â± $_callDuration'
                                 : (_isCaller
                                     ? 'Llamando...'
-                                    : 'Esperando conexión...'),
+                                    : 'Esperando conexiÃ³n...'),
                             style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold)),
                       ),
                     ),
-                  // Botón para alternar video
+                  // BotÃ³n para alternar video
                   Padding(
                     padding: const EdgeInsets.only(top: 24.0),
                     child: IconButton(
@@ -2002,53 +2000,6 @@ class _VideoCallScreenState extends State<VideoCallScreen>
               ),
             ),
           ),
-          Positioned(
-            top: 74,
-            left: 12,
-            right: 12,
-            child: SafeArea(
-              bottom: false,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: ErrorPresenter.buildStatusStrip(
-                  state: _callRealtimeState,
-                  message: _callRealtimeMessage,
-                  onRetry: () {
-                    _requestIceRecovery(
-                      reason: 'manual_retry',
-                      trigger: 'user_retry',
-                    );
-                  },
-                ),
-              ),
-            ),
-          ),
-          if (kDebugMode)
-            Positioned(
-              top: 126,
-              left: 12,
-              right: 12,
-              child: SafeArea(
-                bottom: false,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withAlpha(170),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: const Color(0xFF3B4E62)),
-                  ),
-                  child: Text(
-                    'diag session=$_sessionStatus  ice=$_iceStatus  pc=$_pcStatus  sig=$_signalStatus  net=${_networkQuality.name}  local=$_localPathType($_localCandidateCount)  remote=$_remotePathType($_remoteCandidateCount)',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ),
-              ),
-            ),
           if (hasRemoteVideo)
             Positioned(
               top: 40,
@@ -2093,15 +2044,15 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                             icon: micOn ? Icons.mic : Icons.mic_off,
                             color: micOn ? Colors.white : Colors.red,
                             semanticLabel: micOn
-                                ? 'Micrófono activado'
-                                : 'Micrófono desactivado',
+                                ? 'MicrÃ³fono activado'
+                                : 'MicrÃ³fono desactivado',
                             onTap: () {
                               HapticFeedback.selectionClick();
                               setState(() => micOn = !micOn);
                               _showBanner(
                                   micOn
-                                      ? 'Micrófono activado'
-                                      : 'Micrófono desactivado',
+                                      ? 'MicrÃ³fono activado'
+                                      : 'MicrÃ³fono desactivado',
                                   micOn ? Colors.green : Colors.red);
                               _toggleMic();
                             },
@@ -2113,15 +2064,15 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                                   : Icons.videocam_off,
                               color: cameraOn ? Colors.white : Colors.red,
                               semanticLabel: cameraOn
-                                  ? 'Cámara activada'
-                                  : 'Cámara desactivada',
+                                  ? 'CÃ¡mara activada'
+                                  : 'CÃ¡mara desactivada',
                               onTap: () {
                                 HapticFeedback.selectionClick();
                                 setState(() => cameraOn = !cameraOn);
                                 _showBanner(
                                     cameraOn
-                                        ? 'Cámara activada'
-                                        : 'Cámara desactivada',
+                                        ? 'CÃ¡mara activada'
+                                        : 'CÃ¡mara desactivada',
                                     cameraOn ? Colors.green : Colors.red);
                                 _toggleCamera();
                               },
@@ -2191,7 +2142,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                                 color: Colors.white,
                                 label: 'Invitar',
                                 semanticLabel:
-                                    'Compartir invitación de llamada',
+                                    'Compartir invitaciÃ³n de llamada',
                                 onTap: () {
                                   HapticFeedback.selectionClick();
                                   unawaited(_shareCallInvite());
@@ -2271,3 +2222,5 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     );
   }
 }
+
+

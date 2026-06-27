@@ -117,6 +117,17 @@ class ResilientStreamSubscription<T> {
     _log('error: $error');
     _onError?.call(error, stackTrace);
 
+    // Stop retrying on permission errors (PERMISSION_DENIED from Firestore)
+    final isPermissionDenied = error.toString().contains('PERMISSION_DENIED') ||
+        error.toString().contains('permission-denied') ||
+        error.toString().contains('Missing or insufficient permissions');
+
+    if (isPermissionDenied) {
+      _emitStatus(ResilientStreamStatus.offline);
+      _log('permission denied - stopping retries. Check Firestore rules.');
+      return;
+    }
+
     if (_maxRetryAttempts != null && _retryAttempt >= _maxRetryAttempts!) {
       _emitStatus(ResilientStreamStatus.offline);
       _log('max retries reached, going offline');
