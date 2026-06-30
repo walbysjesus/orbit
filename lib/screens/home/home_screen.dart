@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'dart:async' show StreamSubscription, Timer, unawaited;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +18,7 @@ import '../communication/video_call_screen.dart';
 // Services
 import '../../services/auth_service.dart';
 import '../../services/call_session_service.dart';
+import '../../services/fcm_service.dart';
 import '../../services/network_service.dart';
 import '../../services/resilient_stream_helper.dart';
 import '../../utils/error_presenter.dart';
@@ -48,8 +49,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _incomingCallerName;
   bool _incomingAudioOnly = true;
   String _incomingListenerStatusLabel = '';
-  RealtimeUxState _homeRealtimeState = RealtimeUxState.reconnecting;
-  String _homeRealtimeMessage = 'Conectando servicios en tiempo real...';
+  RealtimeUxState _homeRealtimeState = RealtimeUxState.online;
+  String _homeRealtimeMessage = 'En línea';
 
   Timer? _networkTimer;
   final AudioPlayer _incomingRingPlayer = AudioPlayer();
@@ -63,6 +64,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadUserDisplay();
     _refreshNetworkInsight();
     _ensureOrbitNumberPresent();
+    _listenForIncomingCalls();
     _networkTimer = Timer.periodic(
       const Duration(seconds: 20),
       (_) => _refreshNetworkInsight(),
@@ -233,7 +235,9 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
 
-        if (status == 'ringing' && _activeIncomingCallId != callDoc.id) {
+        if (status == 'ringing' &&
+            !FCMService.isIncomingCallSessionActive(callDoc.id) &&
+            _activeIncomingCallId != callDoc.id) {
           final callType =
               (session['callType'] as String?)?.trim().toLowerCase();
           if (!mounted) return;
@@ -274,6 +278,10 @@ class _HomeScreenState extends State<HomeScreen> {
         _homeRealtimeMessage = 'Sincronización en tiempo real activa.';
         break;
       case ResilientStreamStatus.connecting:
+        label = '';
+        _homeRealtimeState = RealtimeUxState.online;
+        _homeRealtimeMessage = 'En línea. Sincronizando eventos.';
+        break;
       case ResilientStreamStatus.reconnecting:
         label = 'Reconectando...';
         _homeRealtimeState = RealtimeUxState.reconnecting;
@@ -308,12 +316,12 @@ class _HomeScreenState extends State<HomeScreen> {
           android: AudioContextAndroid(
             audioMode: AndroidAudioMode.normal,
             contentType: AndroidContentType.sonification,
-            usageType: AndroidUsageType.alarm,
-            audioFocus: AndroidAudioFocus.gainTransient,
+            usageType: AndroidUsageType.notificationRingtone,
+            audioFocus: AndroidAudioFocus.gain,
           ),
           iOS: AudioContextIOS(
             category: AVAudioSessionCategory.playback,
-            options: {AVAudioSessionOptions.mixWithOthers},
+            options: [AVAudioSessionOptions.mixWithOthers],
           ),
         ),
       );
@@ -354,18 +362,35 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_activeIncomingCallId == null || _incomingCallerId == null) return;
     try {
       await _stopIncomingRingtone();
-      await CallSessionService.acceptSession(_activeIncomingCallId!);
+      final callId = _activeIncomingCallId!;
+      final callerId = _incomingCallerId;
+      final callerName = _incomingCallerName;
+      final incomingAudioOnly = _incomingAudioOnly;
+      if (callerId == null || callerId.trim().isEmpty) return;
+      await CallSessionService.acceptSession(callId);
       if (!mounted) return;
-      _open(
-        context,
-        VideoCallScreen(
-          remoteUserId: _incomingCallerId,
-          initialRemoteDisplayName: _incomingCallerName,
-          callSessionId: _activeIncomingCallId,
-          isCaller: false, // callee siempre es quien acepta
-          audioOnly: _incomingAudioOnly,
+      FCMService.markIncomingCallSessionActive(callId);
+      setState(() {
+        _activeIncomingCallId = null;
+        _incomingCallerId = null;
+        _incomingCallerName = null;
+        _incomingAudioOnly = true;
+      });
+      Navigator.of(context)
+          .push(
+        MaterialPageRoute(
+          builder: (_) => VideoCallScreen(
+            remoteUserId: callerId,
+            initialRemoteDisplayName: callerName,
+            callSessionId: callId,
+            isCaller: false,
+            audioOnly: incomingAudioOnly,
+          ),
         ),
-      );
+      )
+          .whenComplete(() {
+        FCMService.clearIncomingCallSessionActive(callId);
+      });
     } catch (_) {
       if (mounted) {
         ErrorPresenter.showSnack(
@@ -776,14 +801,14 @@ class _HomeScreenState extends State<HomeScreen> {
         drawer: _buildHomeDrawer(uid, _displayName),
         body: Column(
           children: [
-          if (_homeRealtimeState != RealtimeUxState.online)
-            ErrorPresenter.buildStatusStrip(
-              state: _homeRealtimeState,
-              message: _homeRealtimeMessage,
-              onRetry: () {
-                _refreshNetworkInsight();
-              },
-            ),
+            if (_homeRealtimeState != RealtimeUxState.online)
+              ErrorPresenter.buildStatusStrip(
+                state: _homeRealtimeState,
+                message: _homeRealtimeMessage,
+                onRetry: () {
+                  _refreshNetworkInsight();
+                },
+              ),
             // ── Barra compacta superior: Señal + IA ──────────────
             _CompactTopBar(
               networkLabel: _networkLabel,

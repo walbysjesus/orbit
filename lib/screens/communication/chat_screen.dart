@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter_sound/flutter_sound.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
@@ -70,8 +74,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _showEmojiPicker = false;
   bool _uploading = false;
   bool _isRecordingAudio = false;
+  bool _recorderTransitionInProgress = false;
   bool _sendingAudio = false;
   int _recordingSeconds = 0;
+  String? _pendingAudioPath;
+  int _pendingAudioDurationMs = 0;
   bool _initializing = true;
   bool _markingRoomAsRead = false;
   Timer? _readReceiptDebounceTimer;
@@ -1013,8 +1020,247 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _pickAttachment() async {
+    if (_uploading || _sendingAudio || _isRecordingAudio) return;
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.image_outlined),
+              title: const Text('Imagen'),
+              onTap: () async {
+                Navigator.of(ctx).pop();
+                await _pickImageAttachment();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.insert_drive_file_outlined),
+              title: const Text('Archivo'),
+              onTap: () async {
+                Navigator.of(ctx).pop();
+                await _pickFileAttachment();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.location_on_outlined),
+              title: const Text('Ubicacion actual'),
+              onTap: () async {
+                Navigator.of(ctx).pop();
+                await _shareCurrentLocation();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickFileAttachment() async {
     final roomId = _roomId;
     if (roomId == null || _currentUserId.isEmpty || _remoteUserId.isEmpty) {
+      return;
+    }
+
+    setState(() => _uploading = true);
+    try {
+      final result = await FilePicker.pickFiles(withData: true);
+      if (result == null || result.files.isEmpty) {
+        return;
+      }
+      final file = result.files.first;
+      final extension = (file.extension ?? '').toLowerCase();
+      await _uploadAttachment(
+        roomId: roomId,
+        fileName: file.name,
+        extension: extension,
+        sizeBytes: file.size,
+        bytes: file.bytes,
+        filePath: file.path,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        ErrorPresenter.humanize(e, fallback: 'Error al subir archivo.'),
+        state: RealtimeUxState.error,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _uploading = false);
+      }
+    }
+  }
+
+  Future<void> _pickImageAttachment() async {
+    final roomId = _roomId;
+    if (roomId == null || _currentUserId.isEmpty || _remoteUserId.isEmpty) {
+      return;
+    }
+
+    setState(() => _uploading = true);
+    try {
+      final picker = ImagePicker();
+      final image = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 88,
+      );
+      if (image == null) return;
+
+      final fileName = image.name.isEmpty
+          ? 'imagen_${DateTime.now().millisecondsSinceEpoch}.jpg'
+          : image.name;
+      final extensionMatch = RegExp(r'\.([A-Za-z0-9]+)$').firstMatch(fileName);
+      final extension = (extensionMatch?.group(1) ?? 'jpg').toLowerCase();
+      final bytes = await image.readAsBytes();
+
+      await _uploadAttachment(
+        roomId: roomId,
+        fileName: fileName,
+        extension: extension,
+        sizeBytes: bytes.length,
+        bytes: bytes,
+        filePath: image.path,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        ErrorPresenter.humanize(e, fallback: 'Error al subir imagen.'),
+        state: RealtimeUxState.error,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _uploading = false);
+      }
+    }
+  }
+
+  Future<void> _shareCurrentLocation() async {
+    final roomId = _roomId;
+    if (roomId == null || _currentUserId.isEmpty || _remoteUserId.isEmpty) {
+      return;
+    }
+    if (_uploading || _sendingAudio || _isRecordingAudio) return;
+
+    setState(() => _uploading = true);
+    try {
+      await _ensureCryptoReady();
+
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        throw StateError('Activa el GPS para compartir ubicacion.');
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        throw StateError('Permiso de ubicacion denegado.');
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      final lat = pos.latitude;
+      final lng = pos.longitude;
+      final mapsUrl = 'https://maps.google.com/?q=$lat,$lng';
+      final encryptedText =
+          _crypto.encryptForRoom(roomId: roomId, plainText: mapsUrl);
+
+      final batch = _db.batch();
+      final msgRef = _db.collection('messages').doc();
+      final encryptedReplyText = _replyTo == null
+          ? null
+          : _crypto.encryptForRoom(roomId: roomId, plainText: _replyTo!.text);
+
+      batch.set(msgRef, {
+        'roomId': roomId,
+        'senderId': _currentUserId,
+        'text': encryptedText,
+        'type': 'location',
+        'fileUrl': '',
+        'audioUrl': '',
+        'timestamp': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'metadata': {
+          'latitude': lat,
+          'longitude': lng,
+          'mapsUrl': mapsUrl,
+          'replyTo': _replyTo?.id,
+          'replyToText': encryptedReplyText,
+        },
+      });
+
+      if (_legacyMirrorEnabled) {
+        batch.set(
+          _db
+              .collection('chatRooms')
+              .doc(roomId)
+              .collection('messages')
+              .doc(msgRef.id),
+          {
+            'senderId': _currentUserId,
+            'text': encryptedText,
+            'type': 'location',
+            'fileUrl': '',
+            'audioUrl': '',
+            'timestamp': FieldValue.serverTimestamp(),
+            'metadata': {
+              'latitude': lat,
+              'longitude': lng,
+              'mapsUrl': mapsUrl,
+              'replyTo': _replyTo?.id,
+              'replyToText': encryptedReplyText,
+            },
+          },
+        );
+      }
+
+      batch.update(_db.collection('chatRooms').doc(roomId), {
+        'lastMessage': 'Ubicacion compartida',
+        'lastMessageType': 'location',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'unread_$_remoteUserId': FieldValue.increment(1),
+      });
+
+      await _runWithFirestoreRetry(() => batch.commit());
+      if (!mounted) return;
+      setState(() => _replyTo = null);
+      ErrorPresenter.showSnack(
+        context,
+        'Ubicacion enviada.',
+        state: RealtimeUxState.delivered,
+      );
+      unawaited(_markRoomAsRead(force: true));
+    } catch (e) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        ErrorPresenter.humanize(e, fallback: 'No se pudo compartir ubicacion.'),
+        state: RealtimeUxState.error,
+      );
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  Future<void> _uploadAttachment({
+    required String roomId,
+    required String fileName,
+    required String extension,
+    required int sizeBytes,
+    Uint8List? bytes,
+    String? filePath,
+  }) async {
+    if (_currentUserId.isEmpty || _remoteUserId.isEmpty) {
       return;
     }
 
@@ -1033,48 +1279,52 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
-    setState(() => _uploading = true);
+    if (!_allowedAttachmentExtensions.contains(extension)) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        'Tipo de archivo no permitido.',
+        state: RealtimeUxState.error,
+      );
+      return;
+    }
+
+    if (sizeBytes > _maxAttachmentBytes) {
+      if (!mounted) return;
+      ErrorPresenter.showSnack(
+        context,
+        'El archivo supera 10 MB.',
+        state: RealtimeUxState.error,
+      );
+      return;
+    }
+
     try {
-      final result = await FilePicker.pickFiles(withData: true);
-      if (result == null || result.files.isEmpty) {
-        return;
-      }
-
-      final file = result.files.first;
-      final extension = (file.extension ?? '').toLowerCase();
-      if (!_allowedAttachmentExtensions.contains(extension)) {
-        if (!mounted) return;
-        ErrorPresenter.showSnack(
-          context,
-          'Tipo de archivo no permitido.',
-          state: RealtimeUxState.error,
-        );
-        return;
-      }
-
-      if (file.size > _maxAttachmentBytes) {
-        if (!mounted) return;
-        ErrorPresenter.showSnack(
-          context,
-          'El archivo supera 10 MB.',
-          state: RealtimeUxState.error,
-        );
-        return;
-      }
-
+      final safeName = fileName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
       final storagePath =
-          'chatRooms/$roomId/attachments/${DateTime.now().millisecondsSinceEpoch}_${file.name}';
+          'chatRooms/$roomId/attachments/${DateTime.now().millisecondsSinceEpoch}_$safeName';
       final ref = _storage.ref().child(storagePath);
       final contentType = _contentTypeForExtension(extension);
       final metadata = contentType == null
           ? null
           : SettableMetadata(contentType: contentType);
 
-      if (file.bytes != null) {
-        await _runWithFirestoreRetry(() => ref.putData(file.bytes!, metadata));
-      } else if (file.path != null) {
-        await _runWithFirestoreRetry(
-            () => ref.putFile(File(file.path!), metadata));
+      final TaskSnapshot uploadSnapshot;
+      File? uploadedLocalFile;
+      if (bytes != null && bytes.isNotEmpty) {
+        uploadSnapshot =
+            await _runWithStorageRetry(() => ref.putData(bytes, metadata));
+      } else if (filePath != null && filePath.trim().isNotEmpty) {
+        final localFile = File(filePath);
+        if (!await localFile.exists()) {
+          throw StateError('No se encontro el archivo seleccionado.');
+        }
+        if (await localFile.length() <= 0) {
+          throw StateError('El archivo seleccionado esta vacio.');
+        }
+        uploadedLocalFile = localFile;
+        uploadSnapshot =
+            await _runWithStorageRetry(() => ref.putFile(localFile, metadata));
       } else {
         if (!mounted) return;
         ErrorPresenter.showSnack(
@@ -1085,7 +1335,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         return;
       }
 
-      final url = await _runWithFirestoreRetry(() => ref.getDownloadURL());
+      if (uploadSnapshot.state != TaskState.success) {
+        throw StateError('La subida de archivo no finalizo correctamente.');
+      }
+      final url = await _resolveStorageDownloadUrl(
+        ref: uploadSnapshot.ref,
+        localFile: uploadedLocalFile,
+        metadata: metadata,
+      );
       final encryptedUrl =
           _crypto.encryptForRoom(roomId: roomId, plainText: url);
       final text = _controller.text.trim();
@@ -1113,8 +1370,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         'timestamp': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
         'metadata': {
-          'fileName': file.name,
-          'fileSize': file.size,
+          'fileName': fileName,
+          'fileSize': sizeBytes,
           'replyTo': _replyTo?.id,
           'replyToText': encryptedReplyText,
         },
@@ -1135,8 +1392,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             'audioUrl': '',
             'timestamp': FieldValue.serverTimestamp(),
             'metadata': {
-              'fileName': file.name,
-              'fileSize': file.size,
+              'fileName': fileName,
+              'fileSize': sizeBytes,
               'replyTo': _replyTo?.id,
               'replyToText': encryptedReplyText,
             },
@@ -1156,7 +1413,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (!mounted) return;
       ErrorPresenter.showSnack(
         context,
-        'Archivo enviado: ${file.name}',
+        'Archivo enviado: $fileName',
         state: RealtimeUxState.delivered,
       );
       _controller.clear();
@@ -1169,10 +1426,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ErrorPresenter.humanize(e, fallback: 'Error al subir archivo.'),
         state: RealtimeUxState.error,
       );
-    } finally {
-      if (mounted) {
-        setState(() => _uploading = false);
-      }
     }
   }
 
@@ -1182,20 +1435,55 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _toggleRecordingAudio() async {
+    if (_recorderTransitionInProgress || _sendingAudio || _uploading) return;
+    _recorderTransitionInProgress = true;
     if (_isRecordingAudio) {
-      final path = await _recorder.stopRecorder();
-      if (!mounted) return;
-      _recordingTimer?.cancel();
-      final durationMs = _recordingSeconds * 1000;
-      setState(() => _isRecordingAudio = false);
-      if (path != null && path.trim().isNotEmpty) {
-        await _sendAudioMessage(path, durationMs: durationMs);
+      try {
+        final path = await _recorder.stopRecorder();
+        if (!mounted) return;
+        _recordingTimer?.cancel();
+        final durationMs = _recordingSeconds * 1000;
+        String? usablePath;
+        if (path != null && path.trim().isNotEmpty) {
+          final recordedFile = File(path);
+          if (await recordedFile.exists() && await recordedFile.length() > 0) {
+            usablePath = path;
+          } else {
+            try {
+              if (await recordedFile.exists()) {
+                await recordedFile.delete();
+              }
+            } catch (_) {}
+          }
+        }
+        setState(() {
+          _isRecordingAudio = false;
+          _pendingAudioPath = usablePath;
+          _pendingAudioDurationMs = usablePath == null ? 0 : durationMs;
+        });
+        if (!mounted) return;
+        if (usablePath != null) {
+          ErrorPresenter.showSnack(
+            context,
+            'Audio listo para enviar.',
+            state: RealtimeUxState.delivered,
+          );
+        } else {
+          ErrorPresenter.showSnack(
+            context,
+            'No se genero audio valido. Intenta grabar de nuevo.',
+            state: RealtimeUxState.error,
+          );
+        }
+        return;
+      } finally {
+        _recorderTransitionInProgress = false;
       }
-      return;
     }
 
     final roomId = _roomId;
     if (roomId == null || _currentUserId.isEmpty || _remoteUserId.isEmpty) {
+      _recorderTransitionInProgress = false;
       ErrorPresenter.showSnack(
         context,
         'No se pudo iniciar la grabación.',
@@ -1206,6 +1494,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final mic = await Permission.microphone.request();
     if (!mic.isGranted) {
+      _recorderTransitionInProgress = false;
       if (!mounted) return;
       ErrorPresenter.showSnack(
         context,
@@ -1216,6 +1505,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     try {
+      await _discardPendingAudio();
       final path = await _newAudioTempPath();
       await _recorder.startRecorder(
         toFile: path,
@@ -1238,7 +1528,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ErrorPresenter.humanize(e, fallback: 'No se pudo grabar audio.'),
         state: RealtimeUxState.error,
       );
+    } finally {
+      _recorderTransitionInProgress = false;
     }
+  }
+
+  Future<void> _discardPendingAudio() async {
+    final path = _pendingAudioPath;
+    setState(() {
+      _pendingAudioPath = null;
+      _pendingAudioDurationMs = 0;
+    });
+    if (path == null || path.trim().isEmpty) return;
+    try {
+      final f = File(path);
+      if (await f.exists()) {
+        await f.delete();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _sendPendingAudio() async {
+    final path = _pendingAudioPath;
+    if (path == null || path.trim().isEmpty) return;
+    await _sendAudioMessage(
+      path,
+      durationMs: _pendingAudioDurationMs,
+    );
   }
 
   Future<void> _sendAudioMessage(String localPath,
@@ -1266,19 +1582,55 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(() => _sendingAudio = true);
     try {
       final file = File(localPath);
+      if (!await file.exists()) {
+        throw StateError('El audio no existe en almacenamiento local.');
+      }
+      final fileSize = await file.length();
+      if (fileSize <= 0) {
+        throw StateError('El audio grabado esta vacio.');
+      }
+      final msgRef = _db.collection('messages').doc();
       final objectPath =
-          'chatRooms/$roomId/audio/${DateTime.now().millisecondsSinceEpoch}.aac';
+          'chatRooms/$roomId/audio/${_currentUserId}_${msgRef.id}.aac';
       final ref = _storage.ref().child(objectPath);
-      await _runWithFirestoreRetry(() => ref.putFile(
-            file,
-            SettableMetadata(contentType: 'audio/aac'),
-          ));
-      final audioUrl = await _runWithFirestoreRetry(() => ref.getDownloadURL());
+      final audioMetadata = SettableMetadata(contentType: 'audio/aac');
+      final uploadSnapshot = await _runWithStorageRetry(
+        () => ref.putFile(
+          file,
+          audioMetadata,
+        ),
+      );
+      if (uploadSnapshot.state != TaskState.success) {
+        throw StateError('La subida de audio no finalizo correctamente.');
+      }
+      String audioUrl;
+      try {
+        audioUrl = await _resolveStorageDownloadUrl(
+          ref: uploadSnapshot.ref,
+          localFile: file,
+          metadata: audioMetadata,
+        );
+      } catch (e) {
+        if (!_isStorageObjectNotFoundError(e)) rethrow;
+        final fallbackRef = _storage.ref().child(
+            'chatRooms/$roomId/audio/${_currentUserId}_${msgRef.id}_retry_${DateTime.now().microsecondsSinceEpoch}.aac');
+        final fallbackSnapshot = await _runWithStorageRetry(
+          () => fallbackRef.putFile(file, audioMetadata),
+        );
+        if (fallbackSnapshot.state != TaskState.success) {
+          throw StateError(
+              'La recuperación de subida de audio no finalizo correctamente.');
+        }
+        audioUrl = await _resolveStorageDownloadUrl(
+          ref: fallbackSnapshot.ref,
+          localFile: file,
+          metadata: audioMetadata,
+        );
+      }
       final encryptedAudioUrl =
           _crypto.encryptForRoom(roomId: roomId, plainText: audioUrl);
 
       final batch = _db.batch();
-      final msgRef = _db.collection('messages').doc();
       final encryptedReplyText = _replyTo == null
           ? null
           : _crypto.encryptForRoom(roomId: roomId, plainText: _replyTo!.text);
@@ -1331,8 +1683,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
       await _runWithFirestoreRetry(() => batch.commit());
       if (!mounted) return;
-      setState(() => _replyTo = null);
+      setState(() {
+        _replyTo = null;
+        _pendingAudioPath = null;
+        _pendingAudioDurationMs = 0;
+      });
       unawaited(_markRoomAsRead(force: true));
+      try {
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {}
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1770,9 +2131,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       setState(() {
                         // Borra el último carácter (o emoji multi-byte)
                         final chars = text.characters;
-                        _controller.text = chars
-                            .take(chars.length - 1)
-                            .toString();
+                        _controller.text =
+                            chars.take(chars.length - 1).toString();
                         _controller.selection = TextSelection.fromPosition(
                           TextPosition(offset: _controller.text.length),
                         );
@@ -1922,13 +2282,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 onPressed: _pickAttachment,
               ),
               IconButton(
-                icon: const Icon(Icons.mic),
+                icon: Icon(
+                  _isRecordingAudio
+                      ? Icons.stop_circle_outlined
+                      : (_pendingAudioPath != null ? Icons.send : Icons.mic),
+                ),
                 tooltip: _isRecordingAudio
-                    ? 'Detener y enviar audio'
-                    : 'Grabar audio',
-                color: _isRecordingAudio ? Colors.red : null,
-                onPressed: _sendingAudio ? null : _toggleRecordingAudio,
+                    ? 'Detener grabacion'
+                    : (_pendingAudioPath != null
+                        ? 'Enviar audio'
+                        : 'Grabar audio'),
+                color: _isRecordingAudio
+                    ? Colors.red
+                    : (_pendingAudioPath != null ? Colors.green : null),
+                onPressed: _sendingAudio
+                    ? null
+                    : (_pendingAudioPath != null
+                        ? _sendPendingAudio
+                        : _toggleRecordingAudio),
               ),
+              if (_pendingAudioPath != null && !_isRecordingAudio)
+                IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: 'Descartar audio',
+                  onPressed: _sendingAudio ? null : _discardPendingAudio,
+                ),
             ],
           ),
         ],
@@ -1978,6 +2356,119 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     throw lastError ?? StateError('Firestore operation failed');
+  }
+
+  Future<T> _runWithStorageRetry<T>(
+    Future<T> Function() action, {
+    int maxAttempts = 3,
+    Duration baseDelay = const Duration(milliseconds: 600),
+  }) async {
+    Object? lastError;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await action();
+      } on FirebaseException catch (e) {
+        lastError = e;
+        if (_isAppCheckStorageError(e)) {
+          if (kDebugMode) {
+            await _refreshAppCheckDebugToken();
+          }
+          if (attempt == maxAttempts) break;
+        } else if (!_isRetryableStorageError(e) || attempt == maxAttempts) {
+          break;
+        }
+      } on TimeoutException catch (e) {
+        lastError = e;
+        if (attempt == maxAttempts) break;
+      }
+
+      await Future.delayed(Duration(
+        milliseconds: baseDelay.inMilliseconds * attempt,
+      ));
+    }
+
+    if (lastError is FirebaseException &&
+        _isAppCheckStorageError(lastError) &&
+        kDebugMode) {
+      throw StateError(
+        'Firebase App Check bloqueó la subida en debug. Registra el debug token mostrado por Firebase o desactiva temporalmente App Check enforcement solo en desarrollo.',
+      );
+    }
+    throw lastError ?? StateError('Storage operation failed');
+  }
+
+  bool _isRetryableStorageError(FirebaseException error) {
+    switch (error.code) {
+      case 'canceled':
+      case 'cancelled':
+      case 'unknown':
+      case 'unavailable':
+      case 'deadline-exceeded':
+      case 'internal':
+      case 'retry-limit-exceeded':
+      case 'object-not-found':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  Future<String> _resolveStorageDownloadUrl({
+    required Reference ref,
+    File? localFile,
+    SettableMetadata? metadata,
+  }) async {
+    Object? lastError;
+    for (int attempt = 1; attempt <= 4; attempt++) {
+      try {
+        return await _runWithStorageRetry(() => ref.getDownloadURL());
+      } on FirebaseException catch (e) {
+        lastError = e;
+        if (e.code != 'object-not-found') rethrow;
+      }
+
+      await Future.delayed(Duration(milliseconds: 350 * attempt));
+      try {
+        await _runWithStorageRetry(() => ref.getMetadata(), maxAttempts: 2);
+        return await _runWithStorageRetry(() => ref.getDownloadURL());
+      } on FirebaseException catch (e) {
+        lastError = e;
+        if (e.code != 'object-not-found') rethrow;
+      }
+
+      if (attempt == 2 &&
+          localFile != null &&
+          await localFile.exists() &&
+          await localFile.length() > 0) {
+        await _runWithStorageRetry(() => ref.putFile(localFile, metadata));
+      }
+    }
+
+    throw lastError ?? StateError('No se pudo obtener URL de Storage');
+  }
+
+  bool _isAppCheckStorageError(FirebaseException error) {
+    final code = error.code.toLowerCase();
+    final message = (error.message ?? '').toLowerCase();
+    return code == 'permission-denied' ||
+        code == 'unauthenticated' ||
+        message.contains('app check') ||
+        message.contains('appcheck') ||
+        message.contains('invalid token') ||
+        message.contains('placeholder');
+  }
+
+  bool _isStorageObjectNotFoundError(Object error) {
+    if (error is FirebaseException) {
+      return error.code == 'object-not-found';
+    }
+    return error.toString().toLowerCase().contains('object-not-found');
+  }
+
+  Future<void> _refreshAppCheckDebugToken() async {
+    try {
+      await FirebaseAppCheck.instance.getToken(true);
+    } catch (_) {}
   }
 
   Future<void> _ensureCryptoReady() async {

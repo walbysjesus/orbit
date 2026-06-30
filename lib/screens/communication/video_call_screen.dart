@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:math';
 
 import 'package:audioplayers/audioplayers.dart';
@@ -15,6 +15,7 @@ import '../../config/config.dart';
 import '../../services/auth_service.dart';
 import '../../services/call_diagnostics_service.dart';
 import '../../services/call_session_service.dart';
+import '../../services/fcm_service.dart';
 import '../../services/network_service.dart';
 import '../../services/webrtc_service.dart';
 import '../../services/firestore_signaling.dart';
@@ -110,12 +111,17 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   Color _networkColor = const Color(0xFF8FA9C2);
   bool _isSatelliteNetwork = false;
   int? _latencyMs;
+  NetworkQuality _networkQuality = NetworkQuality.unknown;
   bool _videoDegraded = false;
   bool _controlsExpanded = false;
+  RealtimeUxState _callRealtimeState = RealtimeUxState.queued;
+  String _callRealtimeMessage = 'Iniciando llamada...';
   String _sessionStatus = 'n/d';
   String _iceStatus = 'n/d';
   String _pcStatus = 'n/d';
   String _signalStatus = 'n/d';
+  String _localPathType = 'n/d';
+  String _remotePathType = 'n/d';
   int _localCandidateCount = 0;
   int _remoteCandidateCount = 0;
   bool _remoteDescriptionSet = false;
@@ -164,7 +170,15 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   final AudioPlayer _ringPlayer = AudioPlayer();
   MediaStream? _localStream;
   bool _ringtonePlaying = false;
+  bool _incomingRingtonePlaying = false;
+  bool _incomingSessionAcceptRequested = false;
   bool _roomCleanupStarted = false;
+  bool _screenCloseRequested = false;
+  bool _batteryHintShown = false;
+  bool _oemHintShown = false;
+  bool _runtimeInitialized = false;
+  bool _signalingConnectedOnce = false;
+  bool _connectionEstablishedOnce = false;
   static const MethodChannel _androidVoipChannel = MethodChannel('orbit/voip');
 
   @override
@@ -187,7 +201,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       );
       // Schedule pop after showing error
       Future.delayed(const Duration(milliseconds: 500), () {
-        if (mounted) Navigator.pop(context);
+        unawaited(_closeScreenSafely());
       });
       return;
     }
@@ -217,6 +231,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       }
     });
     _ticker.start();
+    _runtimeInitialized = true;
     _showRealtimeConfigWarnings();
     unawaited(_loadRemoteUserSummary());
     _initCall();
@@ -229,6 +244,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   }
 
   void _showRealtimeConfigWarnings() {
+    if (!kDebugMode) return;
     final issues = getRealtimeConfigIssues(forRelease: false);
     if (issues.isEmpty) return;
     _showBanner(
@@ -438,11 +454,13 @@ class _VideoCallScreenState extends State<VideoCallScreen>
 
   @override
   void dispose() {
+    _screenCloseRequested = true;
     _androidVoipChannel.setMethodCallHandler(null);
     WidgetsBinding.instance.removeObserver(this);
     // ========== PHASE 1: COMPREHENSIVE MEMORY CLEANUP ==========
     // 1. Stop active sessions and timers
     unawaited(_stopOutgoingRingtone());
+    unawaited(_stopIncomingRingtone());
     unawaited(_endSessionIfNeeded());
     unawaited(_cleanupSignalingRoomIfNeeded());
 
@@ -490,17 +508,21 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     _peerConnection = null;
 
     // 7. Stop signaling
-    try {
-      unawaited(_stopNativeVoipForeground());
-      unawaited(_setNativeNormalAudioMode());
-      unawaited(_signaling.close());
-    } catch (e) {
-      _logRtc('âš ï¸ Error closing signaling: $e');
+    if (_runtimeInitialized) {
+      try {
+        unawaited(_stopNativeVoipForeground());
+        unawaited(_setNativeNormalAudioMode());
+        unawaited(_signaling.close());
+      } catch (e) {
+        _logRtc('âš ï¸ Error closing signaling: $e');
+      }
     }
 
     // 8. Stop animation and audio
-    _ticker.dispose();
-    _stopwatch.stop();
+    if (_runtimeInitialized) {
+      _ticker.dispose();
+      _stopwatch.stop();
+    }
 
     // 9. Properly dispose audio player (must await to ensure cleanup)
     try {
@@ -571,15 +593,11 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       );
       _logRtc('android_voip_report=$report');
 
-      final manufacturer =
-          (await _androidVoipChannel.invokeMethod<String>('getManufacturer') ??
-                  '')
-              .toLowerCase();
-
       final ignoringBattery = await _androidVoipChannel
               .invokeMethod<bool>('isIgnoringBatteryOptimizations') ??
           false;
-      if (!ignoringBattery && mounted) {
+      if (!ignoringBattery && mounted && !_batteryHintShown && kDebugMode) {
+        _batteryHintShown = true;
         _showBanner(
           'Recomendado: desactivar optimizaciÃ³n de baterÃ­a para llamadas estables',
           Colors.orangeAccent,
@@ -592,15 +610,11 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         );
       }
 
-      final needsOemGuidance =
-          defaultTargetPlatform == TargetPlatform.android &&
-              (manufacturer.contains('xiaomi') ||
-                  manufacturer.contains('huawei') ||
-                  manufacturer.contains('samsung') ||
-                  manufacturer.contains('oppo') ||
-                  manufacturer.contains('vivo') ||
-                  manufacturer.contains('oneplus'));
-      if (needsOemGuidance && mounted) {
+      final oemRestrictionDetected = (report?['autoStartRestricted'] == true) ||
+          (report?['autostartRestricted'] == true) ||
+          (report?['backgroundRestricted'] == true);
+      if (oemRestrictionDetected && mounted && !_oemHintShown && kDebugMode) {
+        _oemHintShown = true;
         _showBanner(
           'Activa auto-inicio en ajustes OEM para mejorar recepciÃ³n de llamadas',
           Colors.blueGrey,
@@ -689,9 +703,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         if (_callSessionId != null && _callSessionId!.isNotEmpty) {
           unawaited(CallSessionService.endSession(_callSessionId!));
         }
-        if (mounted && context.mounted) {
-          Navigator.of(context).maybePop();
-        }
+        unawaited(_closeScreenSafely());
         break;
       case 'onPushKitIncoming':
         _logRtc('pushkit incoming payload=${call.arguments}');
@@ -709,6 +721,8 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     if (_callSessionId != null && _callSessionId!.isNotEmpty) {
       if (_isCaller) {
         _startOutgoingRingtone();
+      } else {
+        unawaited(_acceptIncomingSessionIfNeeded(_callSessionId!));
       }
       _listenCallSession(_callSessionId!);
       return;
@@ -739,8 +753,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         if (!mounted) return; // lifecycle safety fix
         _showBanner('Sin respuesta', Colors.blueGrey);
         await Future.delayed(const Duration(seconds: 1));
-        if (!mounted) return; // lifecycle safety fix
-        Navigator.of(context).pop();
+        await _closeScreenSafely();
       });
     } catch (_) {
       if (!mounted) return;
@@ -762,6 +775,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
 
       if (status == 'accepted') {
         _ringTimeoutTimer?.cancel();
+        unawaited(_stopIncomingRingtone());
         _stopOutgoingRingtone();
         _armConnectTimeout();
         _startCallTimerIfNeeded();
@@ -772,25 +786,31 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       } else if (status == 'ringing') {
         if (_isCaller) {
           _startOutgoingRingtone();
+        } else {
+          unawaited(_acceptIncomingSessionIfNeeded(callId));
+          unawaited(_startIncomingRingtone());
         }
       } else if (status == 'rejected') {
         _connectTimeoutTimer?.cancel();
+        unawaited(_stopIncomingRingtone());
         _stopOutgoingRingtone();
         unawaited(_cleanupSignalingRoomIfNeeded());
         _showBanner('La llamada fue rechazada', Colors.orangeAccent);
-        Navigator.of(context).pop();
+        unawaited(_closeScreenSafely());
       } else if (status == 'missed') {
         _connectTimeoutTimer?.cancel();
+        unawaited(_stopIncomingRingtone());
         _stopOutgoingRingtone();
         unawaited(_cleanupSignalingRoomIfNeeded());
         _showBanner('No contestaron la llamada', Colors.blueGrey);
-        Navigator.of(context).pop();
+        unawaited(_closeScreenSafely());
       } else if (status == 'ended') {
         _connectTimeoutTimer?.cancel();
+        unawaited(_stopIncomingRingtone());
         _stopOutgoingRingtone();
         unawaited(_cleanupSignalingRoomIfNeeded());
         _showBanner('La llamada finalizÃ³', Colors.blueGrey);
-        Navigator.of(context).pop();
+        unawaited(_closeScreenSafely());
       }
     });
   }
@@ -816,8 +836,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       if (!mounted) return;
       _showBanner('No se pudo establecer la llamada', Colors.orangeAccent);
       await Future.delayed(const Duration(seconds: 1));
-      if (!mounted) return; // lifecycle safety fix
-      Navigator.of(context).pop();
+      await _closeScreenSafely();
     });
   }
 
@@ -827,6 +846,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     unawaited(() async {
       if (!mounted) return; // lifecycle safety fix
       try {
+        await _setNativeNormalAudioMode();
         // Configurar AudioContext para Android: modo RINGTONE con usage NOTIFICATION_RINGTONE
         // permite sonar aunque flutter_webrtc haya tomado el audio focus.
         await _ringPlayer.setAudioContext(
@@ -834,14 +854,14 @@ class _VideoCallScreenState extends State<VideoCallScreen>
             android: AudioContextAndroid(
               audioMode: AndroidAudioMode.normal,
               contentType: AndroidContentType.sonification,
-              usageType: AndroidUsageType.alarm,
-              audioFocus: AndroidAudioFocus.gainTransient,
+              usageType: AndroidUsageType.notificationRingtone,
+              audioFocus: AndroidAudioFocus.gain,
             ),
             iOS: AudioContextIOS(
               category: AVAudioSessionCategory.playback,
-              options: {
+              options: [
                 AVAudioSessionOptions.mixWithOthers,
-              },
+              ],
             ),
           ),
         );
@@ -856,12 +876,66 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     }());
   }
 
+  Future<void> _startIncomingRingtone() async {
+    if (_isCaller || _incomingRingtonePlaying) return;
+    _incomingRingtonePlaying = true;
+    try {
+      await _setNativeNormalAudioMode();
+      await _ringPlayer.setAudioContext(
+        AudioContext(
+          android: AudioContextAndroid(
+            audioMode: AndroidAudioMode.normal,
+            contentType: AndroidContentType.sonification,
+            usageType: AndroidUsageType.notificationRingtone,
+            audioFocus: AndroidAudioFocus.gain,
+          ),
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: [
+              AVAudioSessionOptions.mixWithOthers,
+            ],
+          ),
+        ),
+      );
+      await _ringPlayer.setReleaseMode(ReleaseMode.loop);
+      await _ringPlayer.setVolume(1.0);
+      await _ringPlayer.play(AssetSource('audio/outgoing_ring.wav'));
+    } catch (e) {
+      _incomingRingtonePlaying = false;
+      debugPrint('Incoming ringtone error: $e');
+      SystemSound.play(SystemSoundType.alert);
+    }
+  }
+
+  Future<void> _stopIncomingRingtone() async {
+    if (!_incomingRingtonePlaying) return;
+    _incomingRingtonePlaying = false;
+    try {
+      await _ringPlayer.stop();
+    } catch (_) {}
+    unawaited(_setNativeVoipAudioMode());
+  }
+
   Future<void> _stopOutgoingRingtone() async {
     if (!_ringtonePlaying) return;
     _ringtonePlaying = false;
     try {
       await _ringPlayer.stop();
     } catch (_) {}
+    unawaited(_setNativeVoipAudioMode());
+  }
+
+  Future<void> _closeScreenSafely({Duration delay = Duration.zero}) async {
+    if (_screenCloseRequested) return;
+    _screenCloseRequested = true;
+    if (delay > Duration.zero) {
+      await Future.delayed(delay);
+    }
+    if (!mounted) return;
+    final nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop();
+    }
   }
 
   Future<void> _endSessionIfNeeded() async {
@@ -902,9 +976,30 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       _signaling.onMessage = _handleSignalingMessage;
       _signaling.onConnectionChanged = (connected) {
         _logRtc('signaling connectionChanged=$connected');
+        if (connected) {
+          _signalingConnectedOnce = true;
+        }
       };
       _signaling.onError = (error) {
         if (!mounted) return;
+        final normalized = error.trim().toLowerCase();
+        if (normalized.contains('reconectando')) {
+          if (!_signalingConnectedOnce || !_connectionEstablishedOnce) {
+            return;
+          }
+          setState(() {
+            _callRealtimeState = RealtimeUxState.reconnecting;
+            _callRealtimeMessage = 'Reconectando señalización...';
+          });
+          return;
+        }
+        if (normalized.contains('sin conexión')) {
+          setState(() {
+            _callRealtimeState = RealtimeUxState.offline;
+            _callRealtimeMessage = 'Sin conexión de señalización';
+          });
+          return;
+        }
         _showBanner(error, Colors.redAccent);
       };
       // Iniciar stream local ANTES de conectar seÃ±alizaciÃ³n
@@ -913,7 +1008,8 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       if (!mounted) return; // lifecycle safety fix
       if (!permissionsOk) {
         unawaited(_auditCall('permissions_denied'));
-        _showBanner('Permisos de micrÃ³fono/cÃ¡mara requeridos', Colors.redAccent,
+        _showBanner(
+            'Permisos de micrÃ³fono/cÃ¡mara requeridos', Colors.redAccent,
             persistent: true);
         return;
       }
@@ -1221,23 +1317,29 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       setState(() => _iceStatus = _shortEnumValue(state));
       switch (state) {
         case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
-          setState(() {
-            _callRealtimeState = RealtimeUxState.reconnecting;
-            _callRealtimeMessage = 'ConexiÃ³n inestable. Reconectando...';
-          });
-          _showBanner('ConexiÃ³n inestable, reconectando...', Colors.orange);
+          if (_connectionEstablishedOnce) {
+            setState(() {
+              _callRealtimeState = RealtimeUxState.reconnecting;
+              _callRealtimeMessage = 'Conexión inestable. Reconectando...';
+            });
+            _showBanner('Conexión inestable, reconectando...', Colors.orange);
+          }
           _requestIceRecovery(
             reason: 'ice_disconnected',
             trigger: 'ice_state_disconnected',
           );
           break;
         case RTCIceConnectionState.RTCIceConnectionStateFailed:
-          setState(() {
-            _callRealtimeState = RealtimeUxState.reconnecting;
-            _callRealtimeMessage = 'ConexiÃ³n perdida. Reiniciando enlace...';
-          });
+          if (_connectionEstablishedOnce) {
+            setState(() {
+              _callRealtimeState = RealtimeUxState.reconnecting;
+              _callRealtimeMessage = 'Conexión perdida. Reiniciando enlace...';
+            });
+          }
           unawaited(_auditCall('ice_failed'));
-          _showBanner('ConexiÃ³n perdida, reiniciando ICE...', Colors.orange);
+          if (_connectionEstablishedOnce) {
+            _showBanner('Conexión perdida, reiniciando ICE...', Colors.orange);
+          }
           _requestIceRecovery(
             reason: 'ice_failed',
             trigger: 'ice_state_failed',
@@ -1245,6 +1347,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
           break;
         case RTCIceConnectionState.RTCIceConnectionStateConnected:
         case RTCIceConnectionState.RTCIceConnectionStateCompleted:
+          _connectionEstablishedOnce = true;
           setState(() {
             _callRealtimeState = RealtimeUxState.online;
             _callRealtimeMessage = 'Llamada conectada';
@@ -1270,6 +1373,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       _logRtc('connectionState=${_shortEnumValue(state)}');
       setState(() => _pcStatus = _shortEnumValue(state));
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        _connectionEstablishedOnce = true;
         setState(() {
           _callRealtimeState = RealtimeUxState.online;
           _callRealtimeMessage = 'Llamada estable';
@@ -1279,11 +1383,13 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         unawaited(_auditCall('peer_connected'));
         _startCallTimerIfNeeded();
       } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-        setState(() {
-          _callRealtimeState = RealtimeUxState.reconnecting;
-          _callRealtimeMessage =
-              'Error de conexiÃ³n. Intentando recuperar llamada...';
-        });
+        if (_connectionEstablishedOnce) {
+          setState(() {
+            _callRealtimeState = RealtimeUxState.reconnecting;
+            _callRealtimeMessage =
+                'Error de conexión. Intentando recuperar llamada...';
+          });
+        }
         unawaited(_auditCall('peer_failed'));
         _requestIceRecovery(
           reason: 'pc_failed',
@@ -1788,6 +1894,19 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     }
   }
 
+  Future<void> _acceptIncomingSessionIfNeeded(String callId) async {
+    if (_isCaller || _incomingSessionAcceptRequested) return;
+    _incomingSessionAcceptRequested = true;
+    try {
+      await CallSessionService.acceptSession(callId);
+      if (!mounted) return;
+      FCMService.markIncomingCallSessionActive(callId);
+    } catch (e) {
+      _incomingSessionAcceptRequested = false;
+      _logRtc('incoming accept failed: $e');
+    }
+  }
+
   String _shortEnumValue(Object? value) {
     if (value == null) return 'n/d';
     final raw = value.toString();
@@ -1961,13 +2080,27 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        _remoteTitle,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Color(0xFF16324F),
-                          fontWeight: FontWeight.w600,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _remoteTitle,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFF16324F),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            '${ErrorPresenter.stateLabel(_callRealtimeState)} · $_callRealtimeMessage · ${_networkQuality.name} · $_localPathType/$_remotePathType',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFF56728E),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     if (_videoDegraded)
@@ -2222,5 +2355,3 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     );
   }
 }
-
-

@@ -53,6 +53,10 @@
 	<string>Orbit necesita acceso a la galeria para enviar imagenes o videos en chat y estados.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Orbit puede guardar archivos multimedia de conversaciones y estados en tu galeria.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Orbit usa tu ubicacion para compartirla en conversaciones de chat.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Orbit usa tu ubicacion para compartirla en conversaciones de chat.</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Orbit usa notificaciones para llamadas entrantes y alertas importantes.</string>
 	<key>UIBackgroundModes</key>

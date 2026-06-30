@@ -26,6 +26,7 @@ class FirestoreSignaling {
   bool _offerEmitted = false;
   bool _answerEmitted = false;
   bool _peerJoinedEmitted = false;
+  bool _hasSeenConnectedStatus = false;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _roomSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _candidateSub;
@@ -57,6 +58,7 @@ class FirestoreSignaling {
   Future<void> connect() async {
     if (_connected) return;
     _connected = true;
+    _hasSeenConnectedStatus = false;
     onConnectionChanged?.call(true);
 
     try {
@@ -79,15 +81,7 @@ class FirestoreSignaling {
             _db.collection('callSignaling').doc(roomId).snapshots(),
         timeout: const Duration(seconds: 15),
         logTag: 'FirestoreSignalingRoom:$roomId',
-        onStatus: (status) {
-          if (status == ResilientStreamStatus.reconnecting ||
-              status == ResilientStreamStatus.connecting) {
-            onError?.call('Reconectando...');
-          } else if (status == ResilientStreamStatus.timeout ||
-              status == ResilientStreamStatus.offline) {
-            onError?.call('Sin conexión');
-          }
-        },
+        onStatus: _handleResilientStatus,
         onError: (error, _) => _onStreamError(error),
         onData: _onRoomSnapshot,
       );
@@ -105,15 +99,7 @@ class FirestoreSignaling {
             .snapshots(),
         timeout: const Duration(seconds: 15),
         logTag: 'FirestoreSignalingCandidates:$roomId',
-        onStatus: (status) {
-          if (status == ResilientStreamStatus.reconnecting ||
-              status == ResilientStreamStatus.connecting) {
-            onError?.call('Reconectando...');
-          } else if (status == ResilientStreamStatus.timeout ||
-              status == ResilientStreamStatus.offline) {
-            onError?.call('Sin conexión');
-          }
-        },
+        onStatus: _handleResilientStatus,
         onError: (error, _) => _onStreamError(error),
         onData: _onCandidatesSnapshot,
       );
@@ -131,15 +117,7 @@ class FirestoreSignaling {
             .snapshots(),
         timeout: const Duration(seconds: 15),
         logTag: 'FirestoreSignalingEvents:$roomId',
-        onStatus: (status) {
-          if (status == ResilientStreamStatus.reconnecting ||
-              status == ResilientStreamStatus.connecting) {
-            onError?.call('Reconectando...');
-          } else if (status == ResilientStreamStatus.timeout ||
-              status == ResilientStreamStatus.offline) {
-            onError?.call('Sin conexión');
-          }
-        },
+        onStatus: _handleResilientStatus,
         onError: (error, _) => _onStreamError(error),
         onData: _onEventsSnapshot,
       );
@@ -316,6 +294,22 @@ class FirestoreSignaling {
   void _onStreamError(Object error) {
     debugPrint('FirestoreSignaling error: $error');
     onError?.call('Error en señalización Firestore');
+  }
+
+  void _handleResilientStatus(ResilientStreamStatus status) {
+    if (status == ResilientStreamStatus.connected) {
+      _hasSeenConnectedStatus = true;
+      return;
+    }
+    if (!_hasSeenConnectedStatus) {
+      return;
+    }
+    if (status == ResilientStreamStatus.reconnecting) {
+      onError?.call('Reconectando...');
+    } else if (status == ResilientStreamStatus.timeout ||
+        status == ResilientStreamStatus.offline) {
+      onError?.call('Sin conexión');
+    }
   }
 
   // ─────────────────────────────────────────────────────────

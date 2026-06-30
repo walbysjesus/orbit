@@ -33,7 +33,6 @@ class E2EChatCryptoService {
   final Random _random;
 
   String? _localSecret;
-  String? _roomMasterSecret;
   bool _initialized = false;
 
   E2EChatCryptoService({
@@ -48,29 +47,48 @@ class E2EChatCryptoService {
     // Resolve room master key from dart-define first and persist it for
     // continuity. In debug, allow secure local generation only if undefined.
     final configuredMaster = _normalizedMasterKey(chatLocalEncryptionKey);
-    final storedRoomMaster = _normalizedMasterKey(
-        await _secureStorage.read(key: _roomMasterStorageKey));
-
-    if (configuredMaster != null) {
-      _roomMasterSecret = configuredMaster;
-      if (storedRoomMaster != configuredMaster) {
-        await _secureStorage.write(
-          key: _roomMasterStorageKey,
-          value: configuredMaster,
-        );
-      }
-    } else if (storedRoomMaster != null) {
-      _roomMasterSecret = storedRoomMaster;
-    } else if (!kReleaseMode) {
-      final generatedRoomMaster = base64Encode(_randomBytes(32));
-      await _secureStorage.write(
-        key: _roomMasterStorageKey,
-        value: generatedRoomMaster,
+    String? storedRoomMaster;
+    try {
+      storedRoomMaster = _normalizedMasterKey(
+        await _secureStorage.read(key: _roomMasterStorageKey),
       );
-      _roomMasterSecret = generatedRoomMaster;
+    } catch (e) {
+      debugPrint(
+          '[E2EChatCryptoService] No se pudo leer room master de secure storage: $e');
     }
 
-    final existing = await _secureStorage.read(key: _localKeyStorageKey);
+    if (configuredMaster != null) {
+      if (storedRoomMaster != configuredMaster) {
+        try {
+          await _secureStorage.write(
+            key: _roomMasterStorageKey,
+            value: configuredMaster,
+          );
+        } catch (e) {
+          debugPrint(
+              '[E2EChatCryptoService] No se pudo persistir room master configurado: $e');
+        }
+      }
+    } else if (!kReleaseMode) {
+      final generatedRoomMaster = base64Encode(_randomBytes(32));
+      try {
+        await _secureStorage.write(
+          key: _roomMasterStorageKey,
+          value: generatedRoomMaster,
+        );
+      } catch (e) {
+        debugPrint(
+            '[E2EChatCryptoService] No se pudo persistir room master generado: $e');
+      }
+    }
+
+    String? existing;
+    try {
+      existing = await _secureStorage.read(key: _localKeyStorageKey);
+    } catch (e) {
+      debugPrint(
+          '[E2EChatCryptoService] No se pudo leer local key de secure storage: $e');
+    }
     if (existing != null && existing.isNotEmpty) {
       _localSecret = existing;
       _initialized = true;
@@ -78,7 +96,12 @@ class E2EChatCryptoService {
     }
 
     final generated = base64Encode(_randomBytes(32));
-    await _secureStorage.write(key: _localKeyStorageKey, value: generated);
+    try {
+      await _secureStorage.write(key: _localKeyStorageKey, value: generated);
+    } catch (e) {
+      debugPrint(
+          '[E2EChatCryptoService] No se pudo persistir local key en secure storage: $e');
+    }
     _localSecret = generated;
     _initialized = true;
   }
@@ -153,10 +176,8 @@ class E2EChatCryptoService {
 
   encrypt.Key? _tryDeriveRoomKey(String roomId) {
     final configuredMaster = _normalizedMasterKey(chatLocalEncryptionKey);
-    // Prioridad: dart-define → secure storage → clave fija del app (funciona en todos los dispositivos)
-    final activeMaster = configuredMaster ??
-        _normalizedMasterKey(_roomMasterSecret) ??
-        _appDefaultMasterKey;
+    // Prioridad: dart-define -> clave fija del app. No depender de claves por-dispositivo.
+    final activeMaster = configuredMaster ?? _appDefaultMasterKey;
     return _buildRoomKey(roomId: roomId, master: activeMaster);
   }
 

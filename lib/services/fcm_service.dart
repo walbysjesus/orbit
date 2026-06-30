@@ -56,6 +56,12 @@ class FCMService {
   static bool _localNotificationsReady = false;
   static String? _activeChatPeerId;
   static String? _activeIncomingCallSessionId;
+  static final Map<String, DateTime> _recentIncomingCallNavigations =
+      <String, DateTime>{};
+  static const Duration _incomingCallNavigationTtl = Duration(minutes: 2);
+  static bool _incomingCallNavigationInProgress = false;
+  static Map<String, dynamic>? _pendingTapNavigationData;
+  static bool _flushScheduled = false;
 
   static const String _chatRoute = '/chat';
 
@@ -157,6 +163,9 @@ class FCMService {
       }
 
       _initialized = true;
+      if (_pendingTapNavigationData != null) {
+        _schedulePendingNavigationFlush();
+      }
     } catch (e, st) {
       debugPrint('[FCM] Error inicializando FCM: $e\n$st');
       rethrow;
@@ -204,7 +213,7 @@ class FCMService {
     try {
       final data = Map<String, dynamic>.from(
           jsonDecode(payload) as Map<String, dynamic>);
-      _handleNotificationTapData(data);
+      _pendingTapNavigationData = data;
     } catch (_) {
       // Ignorar payload inválido para no romper la apertura.
     }
@@ -253,13 +262,12 @@ class FCMService {
     final type = (message.data['type'] ?? '').toString().trim();
     final isIncomingCall = type == 'incoming_call';
 
-    final title =
-        (message.notification?.title ??
-                message.data['senderName'] ??
-                message.data['callerName'] ??
-                'Orbit')
-            .toString()
-            .trim();
+    final title = (message.notification?.title ??
+            message.data['senderName'] ??
+            message.data['callerName'] ??
+            'Orbit')
+        .toString()
+        .trim();
     final body = (message.notification?.body ??
             message.data['preview'] ??
             message.data['body'] ??
@@ -310,24 +318,26 @@ class FCMService {
   }
 
   static void _handleNotificationTapData(Map<String, dynamic> data) {
+    final normalizedData = Map<String, dynamic>.from(data);
     final type = (data['type'] ?? '').toString().trim();
     final roomId = (data['roomId'] ?? '').toString().trim();
-    final senderId = (data['senderId'] ?? data['callerId'] ?? '')
-        .toString()
-        .trim();
-    final senderName = (data['senderName'] ?? data['callerName'] ?? '')
-        .toString()
-        .trim();
+    final senderId =
+        (data['senderId'] ?? data['callerId'] ?? '').toString().trim();
+    final senderName =
+        (data['senderName'] ?? data['callerName'] ?? '').toString().trim();
 
     final nav = navigatorKey.currentState;
     if (nav == null) {
-      debugPrint('[FCM] navigator no disponible. type=$type');
+      _pendingTapNavigationData = normalizedData;
+      _schedulePendingNavigationFlush();
+      debugPrint(
+          '[FCM] navigator no disponible. Se difiere navegación. type=$type');
       return;
     }
 
     // Manejar llamadas entrantes
     if (type == 'incoming_call') {
-      _openIncomingCallScreen(data);
+      _openIncomingCallScreen(normalizedData);
       return;
     }
 
@@ -346,41 +356,67 @@ class FCMService {
     );
   }
 
+  static void _schedulePendingNavigationFlush() {
+    if (_flushScheduled) return;
+    _flushScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _flushScheduled = false;
+      final pending = _pendingTapNavigationData;
+      if (pending == null) return;
+      final nav = navigatorKey.currentState;
+      if (nav == null) {
+        _schedulePendingNavigationFlush();
+        return;
+      }
+      _pendingTapNavigationData = null;
+      _handleNotificationTapData(pending);
+    });
+  }
+
   static void _openIncomingCallScreen(Map<String, dynamic> data) {
     final nav = navigatorKey.currentState;
     if (nav == null) return;
 
-    final callSessionId = (data['callSessionId'] ?? data['callId'] ?? '')
-        .toString()
-        .trim();
-    final callerId = (data['callerId'] ?? data['senderId'] ?? '')
-        .toString()
-        .trim();
+    final callSessionId =
+        (data['callSessionId'] ?? data['callId'] ?? '').toString().trim();
+    final callerId =
+        (data['callerId'] ?? data['senderId'] ?? '').toString().trim();
     if (callSessionId.isEmpty || callerId.isEmpty) {
       debugPrint(
           '[FCM] incoming_call incompleto: callSessionId=$callSessionId callerId=$callerId');
       return;
     }
+
+    _pruneRecentIncomingCallNavigations();
+    if (_recentIncomingCallNavigations.containsKey(callSessionId)) {
+      debugPrint('[FCM] incoming_call duplicado ignorado: $callSessionId');
+      return;
+    }
+    if (_incomingCallNavigationInProgress) {
+      debugPrint('[FCM] incoming_call ignorado: navegación en curso');
+      return;
+    }
+
     if (isIncomingCallSessionActive(callSessionId)) {
       return;
     }
 
-    final callerName = (data['callerName'] ?? data['senderName'] ?? '')
-        .toString()
-        .trim();
+    final callerName =
+        (data['callerName'] ?? data['senderName'] ?? '').toString().trim();
     final callType = (data['callType'] ?? '').toString().trim().toLowerCase();
     final isVideoFlag =
         (data['isVideo'] ?? 'false').toString().toLowerCase() == 'true';
     final audioOnly = !(callType == 'video' || isVideoFlag);
 
     markIncomingCallSessionActive(callSessionId);
+    _incomingCallNavigationInProgress = true;
+    _recentIncomingCallNavigations[callSessionId] = DateTime.now();
     nav
         .push(
       MaterialPageRoute(
         builder: (_) => VideoCallScreen(
           remoteUserId: callerId,
-          initialRemoteDisplayName:
-              callerName.isEmpty ? 'Usuario' : callerName,
+          initialRemoteDisplayName: callerName.isEmpty ? 'Usuario' : callerName,
           callSessionId: callSessionId,
           isCaller: false,
           audioOnly: audioOnly,
@@ -388,8 +424,20 @@ class FCMService {
       ),
     )
         .whenComplete(() {
+      _incomingCallNavigationInProgress = false;
       clearIncomingCallSessionActive(callSessionId);
     });
+  }
+
+  static void _pruneRecentIncomingCallNavigations() {
+    final now = DateTime.now();
+    _recentIncomingCallNavigations.removeWhere(
+      (_, timestamp) => now.difference(timestamp) > _incomingCallNavigationTtl,
+    );
+  }
+
+  static void openIncomingCallFromData(Map<String, dynamic> data) {
+    _openIncomingCallScreen(Map<String, dynamic>.from(data));
   }
 
   static Future<void> _saveTokenToFirestore(String token) async {

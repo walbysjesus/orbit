@@ -4,8 +4,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -21,7 +19,6 @@ import 'screens/auth/register_screen.dart';
 import 'screens/communication/chat_screen.dart';
 import 'screens/communication/call_initiate_screen.dart';
 import 'screens/communication/call_receiver_screen.dart';
-import 'screens/communication/video_call_screen.dart';
 import 'screens/communication/video_call_screen_production.dart';
 import 'screens/communication/call_history_screen.dart';
 import 'screens/home/home_screen.dart';
@@ -31,7 +28,6 @@ import 'services/auth_service.dart';
 import 'services/fcm_service.dart';
 import 'services/remote_config_service.dart';
 import 'services/crashlytics_service.dart';
-import 'services/call_session_service.dart';
 import 'utils/firebase_auth_validator.dart';
 
 /// Punto de entrada principal de la app Orbit.
@@ -99,7 +95,7 @@ void main() async {
     if (kDebugMode) {
       unawaited(FirebaseAuthValidator.printDiagnostics());
     }
-    
+
     FCMService.initialize().catchError(
       (e) => debugPrint('FCM init error: $e'),
     );
@@ -132,25 +128,53 @@ Future<void> _initializeAppCheck() async {
   // En desarrollo local se omite App Check para evitar bloqueos 403
   // cuando la API/proveedor aun no estan configurados en Firebase.
   if (kDebugMode) {
-    try {
-      await FirebaseAppCheck.instance.activate(
-        providerAndroid: const AndroidDebugProvider(),
-        providerApple: const AppleDebugProvider(),
+    final debugActivated = await _activateAndWarmAppCheck(
+      providerAndroid: const AndroidDebugProvider(),
+      providerApple: const AppleDebugProvider(),
+      label: 'debug',
+    );
+    if (!debugActivated) {
+      debugPrint(
+        'App Check debug aún no validado. Registra el debug token del dispositivo en Firebase Console para habilitar Storage/Firestore en desarrollo.',
       );
-      debugPrint('App Check debug activado');
-    } catch (e, st) {
-      debugPrint('No se pudo activar App Check debug: $e\n$st');
     }
     return;
   }
 
+  await _activateAndWarmAppCheck(
+    providerAndroid: const AndroidPlayIntegrityProvider(),
+    providerApple: const AppleAppAttestProvider(),
+    label: 'release',
+    allowPlaceholderToken: true,
+  );
+}
+
+Future<bool> _activateAndWarmAppCheck({
+  required AndroidAppCheckProvider providerAndroid,
+  required AppleAppCheckProvider providerApple,
+  required String label,
+  bool allowPlaceholderToken = false,
+}) async {
   try {
     await FirebaseAppCheck.instance.activate(
-      providerAndroid: const AndroidPlayIntegrityProvider(),
-      providerApple: const AppleAppAttestProvider(),
+      providerAndroid: providerAndroid,
+      providerApple: providerApple,
     );
+    await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
+    final token = await FirebaseAppCheck.instance.getToken(true);
+    final tokenValue = (token ?? '').trim();
+    final isPlaceholder = tokenValue.isEmpty ||
+        tokenValue.toLowerCase().contains('placeholder') ||
+        tokenValue.toLowerCase().contains('unknown');
+    if (isPlaceholder && !allowPlaceholderToken) {
+      debugPrint('App Check $label activo, pero token no válido todavía.');
+      return false;
+    }
+    debugPrint('App Check $label activado correctamente.');
+    return true;
   } catch (e, st) {
-    debugPrint('No se pudo inicializar App Check: $e\n$st');
+    debugPrint('No se pudo inicializar App Check ($label): $e\n$st');
+    return false;
   }
 }
 
@@ -170,74 +194,22 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   late Locale _locale;
-  StreamSubscription<User?>? _authStateSub;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _incomingCallSub;
-  String? _activeIncomingCallId;
 
   @override
   void initState() {
     super.initState();
     _locale = localeNotifier.value;
     localeNotifier.addListener(_onLocaleChanged);
-    _bindIncomingCallListener();
-    _authStateSub = FirebaseAuth.instance.authStateChanges().listen((_) {
-      _bindIncomingCallListener();
-    });
   }
 
   @override
   void dispose() {
-    _authStateSub?.cancel();
-    _incomingCallSub?.cancel();
     localeNotifier.removeListener(_onLocaleChanged);
     super.dispose();
   }
 
   void _onLocaleChanged() {
     if (mounted) setState(() => _locale = localeNotifier.value);
-  }
-
-  void _bindIncomingCallListener() {
-    _incomingCallSub?.cancel();
-    _incomingCallSub = CallSessionService.incomingRingingStream().listen((snap) {
-      if (snap.docs.isEmpty) return;
-
-      final callDoc = snap.docs.first;
-      final data = callDoc.data();
-      final status = (data['status'] as String?)?.trim();
-      if (status != 'ringing') return;
-      if (_activeIncomingCallId == callDoc.id) return;
-
-      final callerId = (data['callerId'] ?? '').toString().trim();
-      if (callerId.isEmpty) return;
-      if (FCMService.isIncomingCallSessionActive(callDoc.id)) return;
-
-      final callType = (data['callType'] ?? 'voice').toString().trim();
-      final callerName = (data['callerName'] ?? '').toString().trim();
-      final nav = FCMService.navigatorKey.currentState;
-      if (nav == null) return;
-      FCMService.markIncomingCallSessionActive(callDoc.id);
-      _activeIncomingCallId = callDoc.id;
-      nav
-          .push(
-        MaterialPageRoute(
-          builder: (_) => VideoCallScreen(
-            remoteUserId: callerId,
-            initialRemoteDisplayName:
-                callerName.isEmpty ? 'Usuario' : callerName,
-            callSessionId: callDoc.id,
-            isCaller: false,
-            audioOnly: callType != 'video',
-          ),
-        ),
-      )
-          .whenComplete(() {
-        FCMService.clearIncomingCallSessionActive(callDoc.id);
-        if (_activeIncomingCallId == callDoc.id) {
-          _activeIncomingCallId = null;
-        }
-      });
-    });
   }
 
   @override
@@ -355,7 +327,8 @@ class _MyAppState extends State<MyApp> {
         '/settings': (_) => const SettingsScreen(),
         '/call-initiate': (_) => const CallInitiateScreen(),
         '/call-receiver': (context) {
-          final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+          final args = ModalRoute.of(context)?.settings.arguments
+              as Map<String, dynamic>?;
           return CallReceiverScreen(
             callId: args?['callId'] ?? '',
             callerId: args?['callerId'] ?? '',
@@ -365,7 +338,8 @@ class _MyAppState extends State<MyApp> {
           );
         },
         '/video-call': (context) {
-          final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+          final args = ModalRoute.of(context)?.settings.arguments
+              as Map<String, dynamic>?;
           return VideoCallScreenProduction(
             roomId: args?['roomId'] ?? '',
             remoteUserId: args?['remoteUserId'] ?? '',

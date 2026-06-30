@@ -154,8 +154,32 @@ class ChatBubble extends StatelessWidget {
                             if (text.isNotEmpty)
                               Padding(
                                 padding: const EdgeInsets.only(top: 2),
-                                child: Text(text,
-                                    style: const TextStyle(fontSize: 15)),
+                                child: messageType == 'location'
+                                    ? GestureDetector(
+                                        onTap: () =>
+                                            _openAttachmentUrl(context, text),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: const [
+                                            Icon(Icons.location_on_outlined,
+                                                size: 18, color: Colors.blue),
+                                            SizedBox(width: 4),
+                                            Flexible(
+                                              child: Text(
+                                                'Abrir ubicacion en mapa',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  color: Colors.blue,
+                                                  decoration:
+                                                      TextDecoration.underline,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : Text(text,
+                                        style: const TextStyle(fontSize: 15)),
                               ),
                             if (timeLabel != null ||
                                 (status != null && status!.isNotEmpty))
